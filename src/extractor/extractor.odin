@@ -252,7 +252,7 @@ declaration_end_offset :: proc(tokens: []Token, start_index, source_len: int) ->
 		// The lightweight lexer intentionally leaves newline insertion to this
 		// source parser. A following top-level declaration is therefore also a
 		// reliable boundary for declarations that omit an explicit semicolon.
-		if expression_depth == 0 && index > start_index && token.kind == .Ident && index+1 < len(tokens) && tokens[index+1].text == ":" { end = token.offset; break }
+		if expression_depth == 0 && index > start_index && token.kind == .Ident && index+1 < len(tokens) && (tokens[index+1].text == ":" || tokens[index+1].text == "::") { end = token.offset; break }
 	}
 	return end
 }
@@ -280,6 +280,9 @@ file_matches_tags :: proc(source, target_os, target_arch: string) -> (include, i
 		if text == "test" { is_test = true; continue }
 		if !strings.has_prefix(text, "build") do continue
 		values := strings.trim_space(text[len("build"):])
+		// Odin uses `#+build ignore` for files such as examples that live next
+		// to a package but are deliberately excluded from that package build.
+		if values == "ignore" do return false, is_test
 		line_matches := false
 		for group in strings.split(values, ",", context.temp_allocator) {
 			positive_os, positive_arch := false, false
@@ -301,6 +304,17 @@ file_matches_tags :: proc(source, target_os, target_arch: string) -> (include, i
 		include &&= line_matches
 	}
 	return include, is_test
+}
+
+// declaration_token_skip returns the last token belonging to a declaration
+// whose source slice ends at end_offset. Skipping a recognized top-level
+// declaration body prevents nested procedures and local `:=` statements from
+// being rediscovered as package declarations.
+declaration_token_skip :: proc(tokens: []Token, declaration_index, end_offset: int) -> int {
+	for index := declaration_index + 1; index < len(tokens); index += 1 {
+		if tokens[index].offset >= end_offset do return index - 1
+	}
+	return len(tokens) - 1
 }
 
 parse_source_file :: proc(path, source: string, allocator: mem.Allocator) -> (file: Source_File, diagnostics: [dynamic]Diagnostic) {
@@ -360,10 +374,12 @@ parse_source_file :: proc(path, source: string, allocator: mem.Allocator) -> (fi
 			kind := Declaration_Kind.Constant
 			next := tokens[i+2]
 			if next.text == "proc" do kind = .Procedure
-			if next.text == "struct" || next.text == "union" || next.text == "enum" || next.text == "bit_set" || next.text == "bit_field" do kind = .Type
+			if next.text == "struct" || next.text == "union" || next.text == "enum" || next.text == "bit_set" || next.text == "bit_field" || next.text == "distinct" do kind = .Type
+			if next.text == "#" && i+4 < len(tokens) && tokens[i+3].text == "type" && tokens[i+4].text == "proc" do kind = .Type
 			end := declaration_end_offset(tokens[:], i+2, len(file.source))
 			append(&file.declarations, Declaration{name = strings.clone(token.text, allocator), kind = kind, docs = comment_docs(pending_comments[:], allocator), line = token.line, column = token.column, offset = token.offset, source = strings.trim_right_space(file.source[token.offset:end])})
 			clear(&pending_comments)
+			i = declaration_token_skip(tokens[:], i, end)
 			continue
 		}
 		// `name: Type = value` and `name := value` are ordinary top-level
@@ -372,6 +388,7 @@ parse_source_file :: proc(path, source: string, allocator: mem.Allocator) -> (fi
 			end := declaration_end_offset(tokens[:], i+2, len(file.source))
 			append(&file.declarations, Declaration{name = strings.clone(token.text, allocator), kind = .Variable, docs = comment_docs(pending_comments[:], allocator), line = token.line, column = token.column, offset = token.offset, source = strings.trim_right_space(file.source[token.offset:end])})
 			clear(&pending_comments)
+			i = declaration_token_skip(tokens[:], i, end)
 			continue
 		}
 		if token.text != ";" && token.text != "@" && token.text != "(" && token.text != ")" do clear(&pending_comments)

@@ -20,8 +20,8 @@ actual code, tests, documentation, and release practice.
   artifacts.
 - Build offline static documentation sites from compatible artifacts.
 - Discover a focused subset of Odin source packages and declarations.
-- Build a site directly from source when incomplete semantic facts are
-  explicitly allowed.
+- Build a site directly from source when all required facts can be established
+  without compiler execution.
 
 ## Important limitations
 
@@ -43,7 +43,7 @@ make test
 make build-cli
 
 # Build an offline site from this source tree.
-./dist/varde build --source . --allow-incomplete --out dist/varde
+./dist/varde build --source . --out dist/varde
 
 # Inspect or render a compatible document artifact.
 ./dist/varde inspect path/to/project.odin-doc

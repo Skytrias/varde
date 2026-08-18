@@ -10,6 +10,12 @@ package_index_by_name :: proc(workspace: ^Workspace, name: string) -> int {
 	return -1
 }
 
+document_entity_by_name :: proc(document: ^doc.Document, name: string) -> ^doc.Entity {
+	if document == nil do return nil
+	for &entity in document.entities do if entity.name == name do return &entity
+	return nil
+}
+
 @(test)
 source_sloc_ignores_blank_and_comment_only_lines :: proc(t: ^testing.T) {
 	source := "\n// heading\nvalue := 1 // trailing comment\n/* block\ncomment */\n/* inline */ value := 2\n"
@@ -23,6 +29,16 @@ source_initializer_excerpt_bounds_large_constant_expressions :: proc(t: ^testing
 	testing.expect(t, len(excerpt) == len(value), "small initializers should be preserved")
 	large := strings.repeat("x", SOURCE_INITIALIZER_DISPLAY_MAX_BYTES + 1, context.temp_allocator)
 	testing.expect(t, len(source_initializer_excerpt(large)) == SOURCE_INITIALIZER_DISPLAY_MAX_BYTES, "large initializers should be capped in emitted artifacts")
+}
+
+@(test)
+parse_source_file_keeps_adjacent_declaration_initializers_separate :: proc(t: ^testing.T) {
+	file, diagnostics := parse_source_file("inline.odin", "package inline\nfirst :: \"one\"\nsecond :: u8(2)\n", context.temp_allocator)
+	defer delete(diagnostics)
+	testing.expect(t, len(diagnostics) == 0)
+	testing.expect(t, len(file.declarations) == 2)
+	testing.expect(t, file.declarations[0].source == "first :: \"one\"")
+	testing.expect(t, file.declarations[1].source == "second :: u8(2)")
 }
 
 @(test)
@@ -62,6 +78,14 @@ extract_excludes_nonmatching_platform_and_test_files :: proc(t: ^testing.T) {
 }
 
 @(test)
+build_ignore_tag_excludes_a_file_before_package_validation :: proc(t: ^testing.T) {
+	workspace := Extract(Config{root_path = "src/extractor/fixtures/tags", target_os = "linux", target_arch = "amd64"})
+	defer Destroy(&workspace)
+	testing.expect(t, len(workspace.packages) == 1)
+	for diagnostic in workspace.diagnostics do testing.expect(t, diagnostic.kind != .Package_Mismatch, "#+build ignore must exclude the file before package validation")
+}
+
+@(test)
 extract_reports_relative_import_cycle :: proc(t: ^testing.T) {
 	workspace := Extract(Config{root_path = "src/extractor/fixtures/cycle", target_os = "linux", target_arch = "amd64"})
 	defer Destroy(&workspace)
@@ -93,4 +117,41 @@ lower_emits_valid_document_for_supported_source_subset :: proc(t: ^testing.T) {
 	testing.expect(t, parsed.entities[9].name == "input" && parsed.entities[9].type > 0)
 	_, upstream_err := upstream.read_from_bytes(data[:])
 	testing.expect(t, upstream_err == .None)
+}
+
+@(test)
+lower_recognizes_literal_conversion_and_qualified_type_syntax :: proc(t: ^testing.T) {
+	workspace := Extract(Config{root_path = "src/extractor/fixtures/lowering", target_os = "linux", target_arch = "amd64"})
+	defer Destroy(&workspace)
+	result := Lower(&workspace, {incomplete_policy = .Reject})
+	defer Lower_Result_Destroy(&result)
+	testing.expect(t, result.complete, "source facts with a literal, explicit conversion, or qualified type spelling should not require the checker")
+	testing.expect(t, len(result.diagnostics) == 0)
+	testing.expect(t, result.document.types[result.document.entities[1].type].name == "untyped string")
+	testing.expect(t, result.document.types[result.document.entities[2].type].name == "untyped string")
+	testing.expect(t, result.document.types[result.document.entities[3].type].name == "u8")
+	testing.expect(t, result.document.types[result.document.entities[4].type].name == "remote.Value")
+}
+
+@(test)
+lower_preserves_local_aliases_literal_variables_and_top_level_scope :: proc(t: ^testing.T) {
+	workspace := Extract(Config{root_path = "src/extractor/fixtures/source_facts", target_os = "linux", target_arch = "amd64"})
+	defer Destroy(&workspace)
+	testing.expect(t, len(workspace.packages) == 1 && len(workspace.packages[0].files[0].declarations) == 10, "nested declarations must not escape a procedure body")
+	result := Lower(&workspace, {incomplete_policy = .Reject})
+	defer Lower_Result_Destroy(&result)
+	testing.expect(t, result.complete)
+	literal := document_entity_by_name(&result.document, "Literal")
+	value_alias := document_entity_by_name(&result.document, "Value_Alias")
+	record_alias := document_entity_by_name(&result.document, "Record_Alias")
+	distinct_bytes := document_entity_by_name(&result.document, "Distinct_Bytes")
+	predicate := document_entity_by_name(&result.document, "Predicate")
+	run := document_entity_by_name(&result.document, "Run")
+	run_alias := document_entity_by_name(&result.document, "Run_Alias")
+	testing.expect(t, literal != nil && result.document.types[literal.type].name == "untyped string" && literal.init_string == "\"literal\"")
+	testing.expect(t, value_alias != nil && value_alias.kind == 1 && value_alias.init_string == "Value")
+	testing.expect(t, record_alias != nil && record_alias.kind == 3 && record_alias.flags & (1<<20) != 0 && record_alias.init_string == "Record")
+	testing.expect(t, distinct_bytes != nil && result.document.types[distinct_bytes.type].kind == 5 && result.document.types[distinct_bytes.type].elem_counts[0] == 8 && distinct_bytes.init_string == "distinct [8]u32")
+	testing.expect(t, predicate != nil && result.document.types[predicate.type].kind == 14 && predicate.init_string == "#type proc(value: int) -> bool")
+	testing.expect(t, run != nil && run_alias != nil && run_alias.kind == 4 && run_alias.type == run.type)
 }

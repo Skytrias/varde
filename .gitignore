@@ -10,7 +10,8 @@ __pycache__/
 *~
 
 # Local build and generated-site output
-/docs/
+/docs/*
+!/docs/doc-format-conformance.md
 dist/
 build/
 out/

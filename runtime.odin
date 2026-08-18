@@ -291,7 +291,6 @@ test_runtime_build_publishes_site_and_sidecar :: proc(t: ^testing.T) {
 		source_path = root,
 		output_dir = "dist/docs",
 		emit_doc_path = "dist/docs/demo.odin-doc",
-		allow_incomplete = true,
 	}
 	result := Runtime_Build(request)
 	defer Runtime_Build_Result_Destroy(&result)

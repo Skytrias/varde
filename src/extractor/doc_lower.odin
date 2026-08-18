@@ -30,6 +30,14 @@ Lower_Result :: struct {
 	complete:    bool,
 }
 
+Alias_Pending :: struct {
+	package_index: u32,
+	entity_index:  u32,
+	file:          Source_File,
+	declaration:   Declaration,
+	target:        string,
+}
+
 Lower_Result_Destroy :: proc(result: ^Lower_Result, allocator: mem.Allocator = context.allocator) {
 	if result == nil do return
 	doc.Document_Destroy(&result.document, allocator)
@@ -87,14 +95,33 @@ append_untyped_basic_type :: proc(document: ^doc.Document, value: string, alloca
 	name := ""
 	if text == "true" || text == "false" {
 		name = "untyped boolean"
-	} else if len(text) >= 2 && text[0] == '"' && text[len(text)-1] == '"' {
+	} else if len(text) >= 2 && ((text[0] == '"' && text[len(text)-1] == '"') || (text[0] == '`' && text[len(text)-1] == '`')) {
 		name = "untyped string"
 	} else if len(text) >= 3 && text[0] == '\'' && text[len(text)-1] == '\'' {
 		name = "untyped rune"
 	} else {
-		integer := len(text) > 0
-		for ch in text do if !('0' <= ch && ch <= '9') && ch != '_' { integer = false; break }
-		if integer do name = "untyped integer"
+		numeric, floating, digits := len(text) > 0 && '0' <= text[0] && text[0] <= '9', false, 0
+		base, start := 10, 0
+		if len(text) >= 2 && text[0] == '0' {
+			if text[1] == 'x' || text[1] == 'X' { base = 16; start = 2 }
+			if text[1] == 'o' || text[1] == 'O' { base = 8; start = 2 }
+			if text[1] == 'b' || text[1] == 'B' { base = 2; start = 2 }
+		}
+		for ch, index in text {
+			if index < start do continue
+			is_digit := ('0' <= ch && ch <= '9') || (base == 16 && (('a' <= ch && ch <= 'f') || ('A' <= ch && ch <= 'F')))
+			if is_digit {
+				if (base == 2 && ch > '1') || (base == 8 && ch > '7') { numeric = false; break }
+				digits += 1; continue
+			}
+			if ch == '_' do continue
+			if ch == '.' && (base == 10 || base == 16) { floating = true; continue }
+			if (ch == 'e' || ch == 'E') && base == 10 { floating = true; continue }
+			if (ch == 'p' || ch == 'P') && base == 16 { floating = true; continue }
+			if (ch == '+' || ch == '-') && index > start && (text[index-1] == 'e' || text[index-1] == 'E' || text[index-1] == 'p' || text[index-1] == 'P') do continue
+			numeric = false; break
+		}
+		if numeric && digits > 0 do name = "untyped float" if floating else "untyped integer"
 	}
 	if len(name) == 0 do return 0
 	typ := new_type(1, name, allocator)
@@ -103,23 +130,78 @@ append_untyped_basic_type :: proc(document: ^doc.Document, value: string, alloca
 	return u32(len(document.types)-1)
 }
 
-first_identifier :: proc(text: string) -> string {
-	start := -1
-	for ch, index in text {
-		if is_ident_start(byte(ch)) {
-			if start < 0 do start = index
-		} else if start >= 0 {
-			return text[start:index]
-		}
+parse_decimal_count :: proc(value: string) -> (i64, bool) {
+	text := strings.trim_space(value)
+	if len(text) == 0 do return 0, false
+	count := i64(0)
+	digits := 0
+	for ch in text {
+		if ch == '_' do continue
+		if ch < '0' || ch > '9' do return 0, false
+		count = count * 10 + i64(ch - '0')
+		digits += 1
 	}
-	if start >= 0 do return text[start:]
-	return ""
+	return count, digits > 0
+}
+
+// Builtin conversions and compound literals establish their type from source
+// syntax. This is intentionally narrower than expression evaluation: a call
+// such as `factory()` still needs checker information and remains unresolved.
+append_constant_type :: proc(document: ^doc.Document, value: string, allocator: mem.Allocator) -> u32 {
+	text := strings.trim_space(value)
+	if len(text) > 0 && (text[0] == '+' || text[0] == '-') do text = strings.trim_space(text[1:])
+	if basic := append_untyped_basic_type(document, text, allocator); basic != 0 do return basic
+	name := type_name_prefix(text)
+	if len(name) == 0 do return 0
+	remaining := strings.trim_space(text[len(name):])
+	if len(remaining) > 0 && (remaining[0] == '{' || (remaining[0] == '(' && is_builtin_type(name))) {
+		kind := u32(2)
+		if is_builtin_type(name) do kind = 1
+		append(&document.types, new_type(kind, name, allocator))
+		return u32(len(document.types)-1)
+	}
+	return 0
+}
+
+// type_name_prefix preserves the authored spelling of qualified type names
+// (for example `json.Raw_Value`) instead of reducing it to the import alias.
+// Binding that name to a declaration is a separate semantic question.
+type_name_prefix :: proc(text: string) -> string {
+	end := 0
+	expect_identifier_start := true
+	for ch, index in text {
+		if expect_identifier_start {
+			if !is_ident_start(byte(ch)) do break
+			expect_identifier_start = false
+			end = index + 1
+			continue
+		}
+		if is_ident_continue(byte(ch)) { end = index + 1; continue }
+		if ch == '.' { expect_identifier_start = true; end = index + 1; continue }
+		break
+	}
+	if end == 0 || expect_identifier_start do return ""
+	return text[:end]
 }
 
 source_after :: proc(source, marker: string) -> string {
 	index := strings.index(source, marker)
 	if index < 0 do return ""
 	return strings.trim_space(source[index+len(marker):])
+}
+
+source_initializer :: proc(source: string) -> string {
+	index := strings.index(source, "=")
+	if index < 0 do return ""
+	return strings.trim_space(source[index+1:])
+}
+
+direct_alias_target :: proc(initializer: string) -> string {
+	text := strings.trim_space(initializer)
+	if comment := strings.index(text, "//"); comment >= 0 do text = strings.trim_space(text[:comment])
+	target := type_name_prefix(text)
+	if len(target) == 0 || len(strings.trim_space(text[len(target):])) > 0 do return ""
+	return target
 }
 
 // The public artifact preserves initializers for presentation, but an
@@ -167,12 +249,31 @@ add_annotation_type :: proc(document: ^doc.Document, annotation: string, allocat
 		append(&document.types, dynamic_array)
 		return u32(len(document.types)-1), element_proven
 	}
-	name := first_identifier(text)
+	if strings.has_prefix(text, "[") {
+		close := strings.index(text, "]")
+		if close <= 1 do return 0, false
+		count, count_proven := parse_decimal_count(text[1:close])
+		element, element_proven := add_annotation_type(document, text[close+1:], allocator)
+		if element == 0 || !count_proven do return 0, false
+		array := new_type(5, "", allocator)
+		array.elem_count_len = 1
+		array.elem_counts[0] = count
+		append(&array.types, element)
+		append(&document.types, array)
+		return u32(len(document.types)-1), element_proven
+	}
+	name := type_name_prefix(text)
 	if len(name) == 0 do return 0, false
+	// These are type constructors, not named types. Keep the explicit
+	// incomplete result until their full child syntax can be represented.
+	if name == "map" || name == "proc" do return 0, false
 	kind := u32(2) // named syntax; entity binding is deferred to resolution.
 	if is_builtin_type(name) do kind = 1
 	append(&document.types, new_type(kind, name, allocator))
-	return u32(len(document.types)-1), is_builtin_type(name)
+	// A name is a complete syntactic type fact even when the checker would be
+	// needed to bind it to an imported declaration. The artifact keeps the
+	// spelling and only adds a definition edge when local resolution is unique.
+	return u32(len(document.types)-1), true
 }
 
 append_member :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, token: Token, annotation: string, allocator: mem.Allocator) -> bool {
@@ -193,7 +294,8 @@ append_member :: proc(document: ^doc.Document, owner_index, file_index: u32, dec
 
 // parse_members recognizes direct `name: Type` members. It intentionally
 // leaves grouped names, defaults, directives, and polymorphic forms for the
-// semantic parser; callers receive `false` when a member is not a builtin.
+// semantic parser; callers receive `false` when the member syntax cannot be
+// represented by the source lowerer.
 parse_members :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, allocator: mem.Allocator) -> bool {
 	lexer := lexer_init(declaration.source)
 	tokens := make([dynamic]Token, 0, 16, context.temp_allocator)
@@ -246,10 +348,26 @@ parse_procedure :: proc(document: ^doc.Document, parameters_index, procedure_ind
 	return proven
 }
 
+append_procedure_type :: proc(document: ^doc.Document, file_index: u32, declaration: Declaration, allocator: mem.Allocator) -> (type_index: u32, proven: bool) {
+	parameters := new_type(13, "", allocator)
+	append(&document.types, parameters)
+	parameters_index := u32(len(document.types)-1)
+	procedure := new_type(14, "", allocator)
+	append(&procedure.types, parameters_index)
+	append(&document.types, procedure)
+	procedure_index := u32(len(document.types)-1)
+	return procedure_index, parse_procedure(document, parameters_index, procedure_index, file_index, declaration, allocator)
+}
+
 add_syntactic_type :: proc(document: ^doc.Document, file_index: u32, declaration: Declaration, allocator: mem.Allocator) -> (type_index: u32, proven: bool) {
 	source := declaration.source
 	#partial switch declaration.kind {
 	case .Type:
+		if strings.contains(source, ":: distinct") {
+			underlying := source_after(source, "distinct")
+			return add_annotation_type(document, underlying, allocator)
+		}
+		if strings.contains(source, ":: #type proc") do return append_procedure_type(document, file_index, declaration, allocator)
 		kind := u32(10) // struct
 		if strings.contains(source, ":: union") do kind = 11
 		if strings.contains(source, ":: enum") do kind = 12
@@ -259,20 +377,50 @@ add_syntactic_type :: proc(document: ^doc.Document, file_index: u32, declaration
 		index := u32(len(document.types)-1)
 		return index, parse_members(document, index, file_index, declaration, allocator)
 	case .Procedure:
-		parameters := new_type(13, "", allocator)
-		append(&document.types, parameters)
-		parameters_index := u32(len(document.types)-1)
-		procedure := new_type(14, "", allocator)
-		append(&procedure.types, parameters_index)
-		append(&document.types, procedure)
-		procedure_index := u32(len(document.types)-1)
-		return procedure_index, parse_procedure(document, parameters_index, procedure_index, file_index, declaration, allocator)
+		return append_procedure_type(document, file_index, declaration, allocator)
 	case .Variable:
 		annotation := source_after(source, ":")
-		if strings.has_prefix(annotation, "=") do return 0, false
+		if strings.has_prefix(annotation, "=") do return append_constant_type(document, source_initializer(annotation), allocator), true
+		if equals := strings.index(annotation, "="); equals >= 0 do annotation = strings.trim_space(annotation[:equals])
 		return add_annotation_type(document, annotation, allocator)
 	case:
 		return 0, false
+	}
+}
+
+find_package_entity :: proc(document: ^doc.Document, package_index: u32, name: string) -> u32 {
+	if document == nil || int(package_index) >= len(document.packages) do return 0
+	for entry in document.packages[package_index].entries do if entry.name == name do return entry.entity
+	return 0
+}
+
+resolve_direct_aliases :: proc(document: ^doc.Document, pending: []Alias_Pending, result: ^Lower_Result, allocator: mem.Allocator) {
+	if document == nil do return
+	resolved := make([]bool, len(pending), context.temp_allocator)
+	for pass := 0; pass < len(pending); pass += 1 {
+		progress := false
+		for item, index in pending {
+			if resolved[index] do continue
+			target_index := find_package_entity(document, item.package_index, item.target)
+			if target_index == 0 || int(target_index) >= len(document.entities) do continue
+			target := document.entities[target_index]
+			if target.type == 0 do continue
+			alias := &document.entities[item.entity_index]
+			alias.kind = target.kind
+			alias.type = target.type
+			if target.kind == 3 {
+				alias.flags |= 1<<20 // OdinDocEntityFlag_Type_Alias
+				alias.init_string = item.target
+			} else if target.kind == 1 {
+				alias.init_string = item.target
+			}
+			resolved[index] = true
+			progress = true
+		}
+		if !progress do break
+	}
+	for item, index in pending {
+		if !resolved[index] do lower_diagnostic(result, item.file, item.declaration, "alias target was not resolved from the local package; emitted as incomplete source syntax", allocator)
 	}
 }
 
@@ -335,12 +483,15 @@ discard_resolved_named_diagnostics :: proc(result: ^Lower_Result, allocator: mem
 
 // Lower converts the source facts collected by Extract into the public
 // doc-format model. It does not call the Odin compiler. Struct/union/enum
-// kind, procedure shape, primitive variable annotations, docs, positions, and
-// declaration ordering are represented structurally. Any unresolved type or
-// constant expression records a diagnostic and marks the result incomplete.
+// kind, procedure shape, source type spelling, docs, positions, and
+// declaration ordering are represented structurally. Unsupported type syntax
+// and expressions whose type cannot be established record a diagnostic and
+// mark the result incomplete.
 Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allocator = context.allocator) -> Lower_Result {
 	result := Lower_Result{document = doc.Document_Init(allocator), diagnostics = make([dynamic]Lower_Diagnostic, 0, 8, allocator), complete = true}
 	if workspace == nil do return result
+	pending_aliases := make([dynamic]Alias_Pending, 0, 8, allocator)
+	defer delete(pending_aliases)
 	for source_package in workspace.packages {
 		package_index := u32(len(result.document.packages))
 		out_package := doc.Package{
@@ -361,9 +512,21 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 				entity.type = type_index
 				if declaration.kind == .Constant {
 					initializer := source_after(declaration.source, "::")
-					entity.type = append_untyped_basic_type(&result.document, initializer, allocator)
+					if target := direct_alias_target(initializer); len(target) > 0 {
+						append(&result.document.entities, entity)
+						entity_index := u32(len(result.document.entities)-1)
+						append(&out_package.entries, doc.Scope_Entry{name = declaration.name, entity = entity_index})
+						append(&pending_aliases, Alias_Pending{package_index = package_index, entity_index = entity_index, file = file, declaration = declaration, target = target})
+						continue
+					}
+					entity.type = append_constant_type(&result.document, initializer, allocator)
 					entity.init_string = source_initializer_excerpt(initializer)
 					if entity.type == 0 do lower_diagnostic(&result, file, declaration, "constant type was not resolved; emitted as incomplete source syntax", allocator)
+				} else if declaration.kind == .Variable {
+					if initializer := source_initializer(declaration.source); len(initializer) > 0 do entity.init_string = source_initializer_excerpt(initializer)
+				} else if declaration.kind == .Type {
+					initializer := source_after(declaration.source, "::")
+					if strings.has_prefix(initializer, "distinct") || strings.has_prefix(initializer, "#type") do entity.init_string = source_initializer_excerpt(initializer)
 				} else if !proven {
 					lower_diagnostic(&result, file, declaration, "declaration type was not semantically resolved; emitted as incomplete source syntax", allocator, entity.type)
 				}
@@ -374,6 +537,7 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 		}
 		append(&result.document.packages, out_package)
 	}
+	resolve_direct_aliases(&result.document, pending_aliases[:], &result, allocator)
 	resolve_unique_named_types(&result.document)
 	discard_resolved_named_diagnostics(&result, allocator)
 	if !result.complete && options.incomplete_policy == .Reject {
