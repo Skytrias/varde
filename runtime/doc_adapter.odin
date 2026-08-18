@@ -209,6 +209,22 @@ document_append_record_entities :: proc(builder: ^strings.Builder, budget: ^Docu
 	}
 }
 
+document_append_enum_entities :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, typ: doc.Type, indent: int) {
+	for entity_index in typ.entities {
+		if budget.truncated do break
+		if entity_index == 0 || int(entity_index) >= len(document.entities) do continue
+		entity := document.entities[entity_index]
+		document_signature_write_docs(builder, budget, entity.docs, indent + 1)
+		document_signature_indent(builder, budget, indent + 1)
+		if len(entity.name) > 0 { document_signature_write(builder, budget, entity.name) } else { document_signature_write(builder, budget, "_") }
+		if len(entity.init_string) > 0 {
+			document_signature_write(builder, budget, " = ")
+			document_signature_write(builder, budget, entity.init_string)
+		}
+		document_signature_write(builder, budget, ",\n")
+	}
+}
+
 document_append_type_child :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, typ: doc.Type, index, depth, indent: int) {
 	document_append_type(builder, budget, document, document_type_at(document, typ, index), depth + 1, indent)
 }
@@ -259,7 +275,7 @@ document_append_type :: proc(builder: ^strings.Builder, budget: ^Document_Signat
 		document_signature_write(builder, budget, "enum")
 		if len(typ.types) > 0 { document_signature_write(builder, budget, " "); document_append_type_child(builder, budget, document, typ, 0, depth, indent) }
 		document_signature_write(builder, budget, " {")
-		if len(typ.entities) > 0 { document_signature_write(builder, budget, "\n"); document_append_record_entities(builder, budget, document, typ, depth + 1, indent); document_signature_indent(builder, budget, indent) }
+		if len(typ.entities) > 0 { document_signature_write(builder, budget, "\n"); document_append_enum_entities(builder, budget, document, typ, indent); document_signature_indent(builder, budget, indent) }
 		document_signature_write(builder, budget, "}")
 	case 13:
 		document_signature_write(builder, budget, "(")
@@ -402,4 +418,24 @@ test_doc_workspace_adapter_preserves_package_docs_and_source_positions :: proc(t
 	testing.expect(t, entry.name == "Answer" && entry.signature == "Answer :: int = 42" && entry.source_line == 7, "entries should preserve a usable signature and source position")
 	structured := adapter.model.packages[0].files[0].entries[1]
 	testing.expect(t, structured.signature == "Record :: struct #packed {\n\tvalue:  int,\n\t// Vertical extent.\n\theight: int,\n}", "type declarations should render structured type graphs as readable code")
+}
+
+@(test)
+test_document_signature_renders_documented_enum_cases :: proc(t: ^testing.T) {
+	document := doc.Document_Init()
+	defer doc.Document_Destroy(&document)
+	append(&document.types, doc.Type{kind = 1, name = "u8", types = make([dynamic]u32, 0), entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	append(&document.entities, doc.Entity{kind = 1, name = "Unknown", docs = "No state has been selected.", attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
+	append(&document.entities, doc.Entity{kind = 1, name = "Ready", init_string = "5", docs = "The system is ready.", attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
+	cases := make([dynamic]u32, 0, 2)
+	append(&cases, 1)
+	append(&cases, 2)
+	underlying := make([dynamic]u32, 0, 1)
+	append(&underlying, 1)
+	append(&document.types, doc.Type{kind = 12, types = underlying, entities = cases, where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	builder: strings.Builder
+	defer strings.builder_destroy(&builder)
+	budget := Document_Signature_Budget{remaining = DOCUMENT_SIGNATURE_MAX_BYTES}
+	document_append_type(&builder, &budget, &document, 2, 0, 0)
+	testing.expect(t, strings.to_string(builder) == "enum u8 {\n\t// No state has been selected.\n\tUnknown,\n\t// The system is ready.\n\tReady = 5,\n}", "enum cases should render with their values and documentation")
 }

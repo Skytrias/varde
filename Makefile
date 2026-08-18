@@ -39,7 +39,7 @@ build-doc: build-cli
 # Python is a temporary development convenience until Odin has suitable HTTP
 # support for a native `varde serve` command.
 preview-build: build-cli
-	./dist/varde build --source "$(or $(SOURCE),.)" --out "$(PREVIEW_OUT)"
+	./dist/varde build --source "$(or $(SOURCE),.)" --allow-incomplete --out "$(PREVIEW_OUT)"
 
 preview: preview-build
 	$(PREVIEW_PYTHON) -m http.server "$(PREVIEW_PORT)" --bind "$(PREVIEW_BIND)" -d "$(PREVIEW_OUT)"

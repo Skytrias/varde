@@ -294,6 +294,26 @@ append_member :: proc(document: ^doc.Document, owner_index, file_index: u32, dec
 	return proven
 }
 
+// Enum cases are entities in the public doc format too, but unlike record
+// fields they have no annotation. Keep their authored values and leading
+// comments so renderers can present an enum as a sequence of cases instead of
+// an empty record-like shell.
+append_enum_member :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, token: Token, initializer, docs: string, allocator: mem.Allocator) {
+	if len(docs) > 0 do append(&document._owned_strings, docs)
+	entity := doc.Entity{
+		kind = 1,
+		pos = {file = file_index, line = u32(declaration.line + token.line - 1), column = u32(token.column), offset = u32(declaration.offset + token.offset)},
+		name = token.text,
+		init_string = initializer,
+		docs = docs,
+		attributes = make([dynamic]doc.Attribute, 0, allocator),
+		grouped_entities = make([dynamic]u32, 0, allocator),
+		where_clauses = make([dynamic]string, 0, allocator),
+	}
+	append(&document.entities, entity)
+	append(&document.types[owner_index].entities, u32(len(document.entities)-1))
+}
+
 member_annotation :: proc(tokens: []Token, start_index: int, source: string) -> string {
 	if start_index < 0 || start_index >= len(tokens) do return ""
 	start := tokens[start_index].offset
@@ -304,6 +324,25 @@ member_annotation :: proc(tokens: []Token, start_index: int, source: string) -> 
 		if token.kind == .End { end = token.offset; break }
 		if token.text == "(" || token.text == "[" || token.text == "{" { nesting += 1; continue }
 		if token.text == ")" || token.text == "]" || token.text == "}" { if nesting > 0 { nesting -= 1; continue }; end = token.offset; break }
+		if nesting == 0 && (token.text == "," || token.text == ";" || token.kind == .Comment) { end = token.offset; break }
+	}
+	return strings.trim_space(source[start:end])
+}
+
+enum_member_initializer :: proc(tokens: []Token, member_index: int, source: string) -> string {
+	if member_index+2 >= len(tokens) || tokens[member_index+1].text != "=" do return ""
+	start := tokens[member_index+2].offset
+	end := len(source)
+	nesting := 0
+	for index := member_index+2; index < len(tokens); index += 1 {
+		token := tokens[index]
+		if token.kind == .End { end = token.offset; break }
+		if token.text == "(" || token.text == "[" || token.text == "{" { nesting += 1; continue }
+		if token.text == ")" || token.text == "]" || token.text == "}" {
+			if nesting > 0 { nesting -= 1; continue }
+			end = token.offset
+			break
+		}
 		if nesting == 0 && (token.text == "," || token.text == ";" || token.kind == .Comment) { end = token.offset; break }
 	}
 	return strings.trim_space(source[start:end])
@@ -346,6 +385,62 @@ parse_members :: proc(document: ^doc.Document, owner_index, file_index: u32, dec
 		previous_non_comment_line = token.line
 	}
 	return proven
+}
+
+// parse_enum_members recognizes one direct enum case per comma-separated
+// item. Case values deliberately remain authored source text: evaluating an
+// arbitrary constant expression would require compiler semantics, while the
+// documentation format only needs the displayed initializer.
+parse_enum_members :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, allocator: mem.Allocator) -> bool {
+	lexer := lexer_init(declaration.source)
+	tokens := make([dynamic]Token, 0, 16, context.temp_allocator)
+	defer delete(tokens)
+	for { token := lexer_next(&lexer); append(&tokens, token); if token.kind == .End do break }
+	pending_comments := make([dynamic]Token, 0, 2, context.temp_allocator)
+	defer delete(pending_comments)
+	open_index := -1
+	for token, index in tokens do if token.text == "{" { open_index = index; break }
+	if open_index < 0 do return true
+	depth := 0
+	previous_non_comment_line := 0
+	expecting_member := false
+	for index := open_index; index < len(tokens); index += 1 {
+		token := tokens[index]
+		if token.text == "{" { depth += 1; if depth == 1 do expecting_member = true; continue }
+		if token.text == "}" {
+			depth -= 1
+			if depth == 0 do break
+			if depth != 1 do clear(&pending_comments)
+			previous_non_comment_line = token.line
+			continue
+		}
+		if token.kind == .Comment {
+			// Trailing comments describe the prior case; only comments before an
+			// expected case become documentation for that following case.
+			if depth == 1 && expecting_member && token.line != previous_non_comment_line do append(&pending_comments, token)
+			continue
+		}
+		if depth != 1 { clear(&pending_comments); previous_non_comment_line = token.line; continue }
+		if token.text == "," || token.text == ";" {
+			expecting_member = true
+			previous_non_comment_line = token.line
+			continue
+		}
+		if expecting_member && token.kind == .Ident {
+			member_docs := comment_docs(pending_comments[:], allocator)
+			append_enum_member(document, owner_index, file_index, declaration, token, enum_member_initializer(tokens[:], index, declaration.source), member_docs, allocator)
+			clear(&pending_comments)
+			expecting_member = false
+		}
+		previous_non_comment_line = token.line
+	}
+	return true
+}
+
+enum_underlying_annotation :: proc(source: string) -> string {
+	underlying := source_after(source, ":: enum")
+	if open := strings.index(underlying, "{"); open >= 0 do underlying = underlying[:open]
+	return strings.trim_space(underlying)
 }
 
 parse_procedure :: proc(document: ^doc.Document, parameters_index, procedure_index, file_index: u32, declaration: Declaration, allocator: mem.Allocator) -> bool {
@@ -410,6 +505,15 @@ add_syntactic_type :: proc(document: ^doc.Document, file_index: u32, declaration
 		}
 		append(&document.types, typ)
 		index := u32(len(document.types)-1)
+		if kind == 12 {
+			proven := true
+			if underlying := enum_underlying_annotation(source); len(underlying) > 0 {
+				underlying_index, underlying_proven := add_annotation_type(document, underlying, allocator)
+				append(&document.types[index].types, underlying_index)
+				proven = underlying_proven
+			}
+			return index, parse_enum_members(document, index, file_index, declaration, allocator) && proven
+		}
 		return index, parse_members(document, index, file_index, declaration, allocator)
 	case .Procedure:
 		return append_procedure_type(document, file_index, declaration, allocator)

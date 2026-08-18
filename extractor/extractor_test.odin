@@ -122,6 +122,28 @@ lower_emits_valid_document_for_supported_source_subset :: proc(t: ^testing.T) {
 }
 
 @(test)
+lower_preserves_enum_cases_comments_and_values :: proc(t: ^testing.T) {
+	workspace := Extract(Config{root_path = "extractor/fixtures/enums", target_os = "linux", target_arch = "amd64"})
+	defer Destroy(&workspace)
+	result := Lower(&workspace, {incomplete_policy = .Reject})
+	defer Lower_Result_Destroy(&result)
+	testing.expect(t, result.complete && len(result.diagnostics) == 0, "simple enum syntax should be complete source data")
+	state := document_entity_by_name(&result.document, "State")
+	testing.expect(t, state != nil && result.document.types[state.type].kind == 12, "enum declarations should retain their enum type")
+	if state == nil do return
+	enum_type := result.document.types[state.type]
+	testing.expect(t, len(enum_type.types) == 1 && result.document.types[enum_type.types[0]].name == "u8", "the enum underlying type should be retained")
+	testing.expect(t, len(enum_type.entities) == 3, "all enum cases should be emitted")
+	if len(enum_type.entities) < 3 do return
+	unknown := result.document.entities[enum_type.entities[0]]
+	ready := result.document.entities[enum_type.entities[1]]
+	failed := result.document.entities[enum_type.entities[2]]
+	testing.expect(t, unknown.name == "Unknown" && unknown.docs == "No state has been selected." && len(unknown.init_string) == 0, "enum case comments should be preserved")
+	testing.expect(t, ready.name == "Ready" && ready.init_string == "5" && ready.docs == "The system is ready.", "enum case values and comments should be preserved")
+	testing.expect(t, failed.name == "Failed", "unassigned enum cases should still be emitted")
+}
+
+@(test)
 lower_recognizes_literal_conversion_and_qualified_type_syntax :: proc(t: ^testing.T) {
 	workspace := Extract(Config{root_path = "extractor/fixtures/lowering", target_os = "linux", target_arch = "amd64"})
 	defer Destroy(&workspace)
