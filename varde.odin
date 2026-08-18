@@ -277,13 +277,19 @@ html_attr :: proc(builder: ^strings.Builder, value: string) { html_escape_append
 package_url_path :: proc(pkg: Package, allocator := context.temp_allocator) -> string {
 	relative := pkg.relative_path
 	if len(relative) == 0 || relative == "." do relative = pkg.name
-	return path_join({"packages", relative, "index.html"}, allocator)
+	return strings.concatenate({"packages/", relative, "/"}, allocator)
+}
+
+package_output_path :: proc(pkg: Package, allocator := context.temp_allocator) -> string {
+	return path_join({package_url_path(pkg, allocator), "index.html"}, allocator)
 }
 
 package_href_from :: proc(from_file, target_file: string, anchor: string, allocator := context.temp_allocator) -> string {
 	from_dir := filepath.dir(from_file)
 	path, err := filepath.rel(from_dir, target_file, allocator)
 	if err != nil do path = target_file
+	if strings.has_suffix(path, "/index.html") do path = path[:len(path)-len("index.html")]
+	if path == "index.html" do path = "./"
 	if len(anchor) > 0 do return strings.concatenate({path, "#", anchor}, allocator)
 	return path
 }
@@ -443,7 +449,7 @@ site_head :: proc(builder: ^strings.Builder, page_title, project_title, relative
 	strings.write_string(builder, "\">")
 	if len(extensions.head) > 0 do strings.write_string(builder, string(extensions.head[:]))
 	strings.write_string(builder, "</head><body><a class=\"skip\" href=\"#main\">Skip to content</a><header class=\"site-header\"><a class=\"brand\" href=\"")
-	html_attr(builder, strings.concatenate({site_root, "index.html"}, context.temp_allocator))
+	html_attr(builder, site_root)
 	strings.write_string(builder, "\">")
 	html_text(builder, project_title)
 	strings.write_string(builder, "</a><button id=\"site-search\" type=\"button\" aria-haspopup=\"dialog\" aria-controls=\"search-dialog\">Search <kbd>⌘K</kbd></button><button id=\"theme-toggle\" type=\"button\" aria-label=\"Toggle color theme\" aria-pressed=\"false\">Theme</button><button id=\"site-settings\" type=\"button\" aria-haspopup=\"dialog\" aria-controls=\"settings-dialog\" aria-label=\"Documentation settings\">Settings</button></header>")
@@ -707,7 +713,7 @@ site_internal_href :: proc(ctx: Doc_Render_Context, raw_url: string, resolve_pac
 		if import_entry := site_import_find_alias(ctx.file, url[:dot]); import_entry != nil {
 			if target_pkg := site_package_for_import(ctx.indexes, ctx.model, ctx.pkg, import_entry.path); target_pkg != nil {
 				if target_entry, ok := site_entry_find_unique(ctx.indexes, target_pkg, url[dot + 1:]); ok {
-					target_path := path_join({ctx.output_root, package_url_path(target_pkg^)})
+					target_path := path_join({ctx.output_root, package_output_path(target_pkg^)})
 					return package_href_from(ctx.page_path, target_path, target_entry.anchor), true
 				}
 			}
@@ -718,7 +724,7 @@ site_internal_href :: proc(ctx: Doc_Render_Context, raw_url: string, resolve_pac
 	}
 	if !resolve_package do return "", false
 	if target_pkg := site_package_for_import(ctx.indexes, ctx.model, ctx.pkg, url); target_pkg != nil {
-		target_path := path_join({ctx.output_root, package_url_path(target_pkg^)})
+		target_path := path_join({ctx.output_root, package_output_path(target_pkg^)})
 		return package_href_from(ctx.page_path, target_path, ""), true
 	}
 	return "", false
@@ -831,7 +837,7 @@ write_doc_body :: proc(builder: ^strings.Builder, text: string, ctx: Doc_Render_
 }
 
 write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^Package, config: Config, extensions: Site_Extensions, output_root: string) -> string {
-	page_relative := package_url_path(pkg^)
+	page_relative := package_output_path(pkg^)
 	page_path := path_join({output_root, page_relative})
 	assets_relative, _ := filepath.rel(filepath.dir(page_path), path_join({output_root, "assets"}), context.temp_allocator)
 	assets_relative = strings.concatenate({assets_relative, "/"}, context.temp_allocator)
@@ -866,7 +872,7 @@ write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^P
 			for import_entry, i in file.imports {
 				if i > 0 do strings.write_string(&builder, ", ")
 				if imported_pkg := site_package_for_import(indexes, model, pkg, import_entry.path); imported_pkg != nil {
-					target_path := path_join({output_root, package_url_path(imported_pkg^)})
+					target_path := path_join({output_root, package_output_path(imported_pkg^)})
 					strings.write_string(&builder, "<a href=\""); html_attr(&builder, package_href_from(page_path, target_path, "")); strings.write_string(&builder, "\">")
 					html_text(&builder, import_entry.path); strings.write_string(&builder, "</a>")
 				} else {
@@ -1022,7 +1028,7 @@ write_package_tree_children :: proc(
 		if collapse_branches && has_children do strings.write_string(builder, "<details class=\"package-branch\" data-package-branch><summary>")
 		if node.package_index >= 0 {
 			pkg := &model.packages[node.package_index]
-			target_path := path_join({output_root, package_url_path(pkg^)})
+			target_path := path_join({output_root, package_output_path(pkg^)})
 			strings.write_string(builder, "<a class=\"tree-package")
 			if pkg.relative_path == active_relative_path do strings.write_string(builder, " is-active")
 			strings.write_string(builder, "\" href=\""); html_attr(builder, package_href_from(page_path, target_path, "")); strings.write_string(builder, "\"")
@@ -1102,6 +1108,7 @@ SITE_JS :: `
 	  const render=()=>{const started=performance.now(),query=input.value.trim();results.replaceChildren();shown=[];selected=-1;if(!query){summary.textContent=entries.length.toLocaleString()+" indexed items. Search a name, path, or signature.";return;}shown=entries.map(item=>({item,score:fuzzy(query,item.search)})).filter(result=>result.score>=0).sort((a,b)=>b.score-a.score||a.item.label.localeCompare(b.item.label)).slice(0,32);shown.forEach(({item},index)=>{const row=document.createElement("a"),kind=document.createElement("span"),label=document.createElement("strong"),context=document.createElement("small");row.className="search-result";row.id="search-result-"+index;row.href=siteRoot+item.href;row.setAttribute("role","option");row.dataset.selected="false";label.textContent=item.label;kind.className="search-kind";kind.textContent=item.kind;context.textContent=item.context;row.append(label,kind,context);row.addEventListener("mouseenter",()=>select(index));results.append(row);});const elapsed=formatDuration(performance.now()-started);summary.textContent=shown.length?shown.length.toLocaleString()+" matches · "+elapsed:"No matches · "+elapsed;if(shown.length)select(0);};
   const showSearch=()=>{if(!dialog.open)dialog.showModal();render();requestAnimationFrame(()=>input.focus());};
   open?.addEventListener("click",showSearch);close?.addEventListener("click",()=>dialog.close());dialog?.addEventListener("click",event=>{if(event.target===dialog)dialog.close();});input?.addEventListener("input",render);input?.addEventListener("keydown",event=>{if(event.key==="ArrowDown"&&shown.length){event.preventDefault();select((selected+1)%shown.length);}else if(event.key==="ArrowUp"&&shown.length){event.preventDefault();select((selected-1+shown.length)%shown.length);}else if(event.key==="Enter"&&selected>=0){event.preventDefault();results.querySelectorAll(".search-result")[selected]?.click();}});
+  document.addEventListener("click",event=>{if(location.protocol!=="file:"||event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;const link=event.target instanceof Element?event.target.closest("a[href]"):null;if(!link||link.target||link.hasAttribute("download"))return;const destination=new URL(link.getAttribute("href"),location.href);if(destination.protocol!=="file:"||!destination.pathname.endsWith("/"))return;event.preventDefault();destination.pathname+="index.html";location.href=destination.href;});
   document.addEventListener("keydown",event=>{const editable=event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement||event.target?.isContentEditable;if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==="k"){event.preventDefault();showSearch();}else if(event.key==="/"&&!editable&&!dialog?.open){event.preventDefault();showSearch();}else if(event.key==="Escape"&&dialog?.open)dialog.close();});
 	const tocPanel=document.querySelector(".package-toc"),tocLinks=[...document.querySelectorAll(".toc-entry[data-toc-target]")],tocTargets=tocLinks.map(link=>({link,target:document.getElementById(link.dataset.tocTarget)})).filter(item=>item.target);
 	if(tocTargets.length){let scheduled=false,activeLink=null;const updateToc=()=>{scheduled=false;let active=tocTargets[0];for(const item of tocTargets){if(item.target.getBoundingClientRect().top<=132)active=item;else break;}tocTargets.forEach(item=>item.link.dataset.active=String(item===active));if(active.link!==activeLink&&tocPanel){const linkRect=active.link.getBoundingClientRect(),panelRect=tocPanel.getBoundingClientRect(),padding=14;if(linkRect.top<panelRect.top+padding)tocPanel.scrollTop+=linkRect.top-panelRect.top-padding;else if(linkRect.bottom>panelRect.bottom-padding)tocPanel.scrollTop+=linkRect.bottom-panelRect.bottom+padding;activeLink=active.link;}};const scheduleToc=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(updateToc);}};addEventListener("scroll",scheduleToc,{passive:true});addEventListener("resize",scheduleToc);scheduleToc();}
@@ -1365,6 +1372,7 @@ test_search_dialog_keeps_controls_outside_result_scroller :: proc(t: ^testing.T)
 	testing.expect(t, strings.contains(rendered, "class=\"search-results-scroll\""), "search results should have their own scroll container")
 	testing.expect(t, strings.contains(SITE_JS, "performance.now()"), "search status should report measured search time")
 	testing.expect(t, strings.contains(SITE_JS, "row.append(label,kind,context)"), "search result kind tags should follow the declaration name")
+	testing.expect(t, strings.contains(SITE_JS, "destination.pathname+=\"index.html\""), "offline directory routes should resolve to their concrete entry documents")
 }
 
 @(test)
@@ -1466,7 +1474,7 @@ test_internal_links_resolve_only_local_or_imported_targets :: proc(t: ^testing.T
 	local_href, local_ok := site_internal_href(ctx, "Local")
 	testing.expect(t, local_ok && local_href == "#local", "unique same-package symbols should resolve locally")
 	import_href, import_ok := site_internal_href(ctx, "ui.Element")
-	testing.expect(t, import_ok && import_href == "../../ui/index.html#element", "declared imported symbols should resolve to package anchors")
+	testing.expect(t, import_ok && import_href == "../../ui/#element", "declared imported symbols should resolve to canonical package directories")
 	_, unknown_ok := site_internal_href(ctx, "not-a-target")
 	testing.expect(t, !unknown_ok, "unresolved references should remain readable rather than inventing a URL")
 	code: strings.Builder
@@ -1474,7 +1482,7 @@ test_internal_links_resolve_only_local_or_imported_targets :: proc(t: ^testing.T
 	write_odin_code(&code, "proc(value: ui.Element) -> Local #packed", ctx)
 	rendered := strings.to_string(code)
 	testing.expect(t, strings.contains(rendered, "class=\"tok-keyword\">proc"), "Odin keywords should receive syntax classes")
-	testing.expect(t, strings.contains(rendered, "../../ui/index.html#element"), "qualified imported identifiers should link in highlighted code")
+	testing.expect(t, strings.contains(rendered, "../../ui/#element"), "qualified imported identifiers should link in highlighted code")
 	testing.expect(t, strings.contains(rendered, "href=\"#local\""), "local identifiers should link in highlighted code")
 	testing.expect(t, strings.contains(rendered, "class=\"tok-directive\">#</span><span class=\"tok-directive\">packed"), "Odin directives should retain a single directive color")
 }
@@ -1535,10 +1543,11 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	testing.expect(t, overrides_read_err == nil && strings.contains(string(overrides_data), "Varde loads this stylesheet after assets/site.css"), "a documented stylesheet override file should be generated")
 	data, read_err := os.read_entire_file(search_index, context.temp_allocator)
 	testing.expect(t, read_err == nil && strings.contains(string(data), "hello"), "offline search index should include symbols")
+	testing.expect(t, read_err == nil && strings.contains(string(data), "packages/core/demo/#hello") && !strings.contains(string(data), "index.html#"), "search links should use canonical package-directory URLs")
 	testing.expect(t, read_err == nil && strings.contains(string(data), "kind"), "offline search index should label result kinds")
 	testing.expect(t, read_err == nil && !strings.contains(string(data), "%!(MISSING"), "search index should be valid JavaScript object syntax")
 	page_data, page_read_err := os.read_entire_file(package_page, context.temp_allocator)
-	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "data-site-root=\"../../../\""), "nested pages should provide a root-relative search base")
+	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "data-site-root=\"../../../\""), "package documents should provide a root-relative search base")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "../../../assets/overrides.css"), "every page should load the optional override stylesheet after base styles")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"package-toc\""), "package pages should include a compact on-page index")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), ">demo.odin<"), "file headings and scrollspy should display workspace-relative source paths")
