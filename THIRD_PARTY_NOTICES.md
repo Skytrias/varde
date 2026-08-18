@@ -2,7 +2,7 @@
 
 ## Odin doc-format
 
-`src/doc_format/doc_format.odin` contains modified/adapted material from
+`doc_format/doc_format.odin` contains modified/adapted material from
 [Odin](https://github.com/odin-lang/Odin)'s public
 `core:odin/doc-format/doc_format.odin`, revision
 `4b95e8a040447a2ab939e0faf6ed094701d0a10e`.

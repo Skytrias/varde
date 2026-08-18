@@ -8,8 +8,8 @@ import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "core:testing"
-import doc "./src/doc_format"
-import extractor "./src/extractor"
+import doc "../doc_format"
+import extractor "../extractor"
 
 Runtime_Diagnostic_Stage :: enum {
 	Configuration,

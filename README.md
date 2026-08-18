@@ -34,6 +34,16 @@ facts it cannot establish and refuses incomplete output unless
 The project intentionally does not invoke, download, bundle, or discover an
 Odin executable at Varde runtime. Odin is needed only to compile Varde itself.
 
+## Repository layout
+
+- `runtime/` contains the Varde package: static-site generation, documentation
+  markup, document adaptation, and the in-process build façade.
+- `doc_format/` implements the validated `.odin-doc` reader, writer, and
+  deterministic merge layer.
+- `extractor/` contains the compiler-free source discovery and lowering path,
+  along with its fixtures.
+- `cli/` is the thin command-line caller of those library packages.
+
 ## Local development
 
 An Odin compiler must be on `PATH`.

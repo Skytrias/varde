@@ -10,9 +10,9 @@ PREVIEW_WATCH_INTERVAL ?= 0.75
 .PHONY: test inspect scan extract-source build-cli build-inspector build-doc preview-build preview preview-watch sample-odin-stdlib
 
 test:
-	$(ODIN_BIN) test .
-	$(ODIN_BIN) test src/doc_format
-	$(ODIN_BIN) test src/extractor
+	$(ODIN_BIN) test runtime
+	$(ODIN_BIN) test doc_format
+	$(ODIN_BIN) test extractor
 
 build-cli:
 	mkdir -p dist

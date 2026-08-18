@@ -11,13 +11,13 @@ accurate about that provenance and about the tool's experimental status.
 
 ## Current shape
 
-- `varde.odin` owns static-site generation and project configuration.
-- `markup.odin` parses safe documentation markup.
-- `src/doc_format` owns an allocated, validated `.odin-doc` reader/writer and
+- `runtime/varde.odin` owns static-site generation and project configuration.
+- `runtime/markup.odin` parses safe documentation markup.
+- `doc_format` owns an allocated, validated `.odin-doc` reader/writer and
   deterministic multi-document merge.
-- `src/extractor` provides the focused compiler-free source discovery, parsing,
+- `extractor` provides the focused compiler-free source discovery, parsing,
   and lowering path.
-- `runtime.odin` exposes the in-process `Runtime_Build` façade; `cli/main.odin`
+- `runtime/runtime.odin` exposes the in-process `Runtime_Build` façade; `cli/main.odin`
   is a thin caller of it.
 
 Source mode is incomplete by design. It must report unknown semantic facts and
@@ -42,7 +42,7 @@ Do not describe it as compiler-equivalent.
 
 ## Source and licensing
 
-`src/doc_format/doc_format.odin` includes modified/adapted material from
+`doc_format/doc_format.odin` includes modified/adapted material from
 Odin's public doc-format source. Preserve its attribution comment and the
 notice in `THIRD_PARTY_NOTICES.md`. Varde uses the zlib license in `LICENSE`.
 

@@ -43,7 +43,7 @@ parse_source_file_keeps_adjacent_declaration_initializers_separate :: proc(t: ^t
 
 @(test)
 extract_discovers_tags_declarations_and_relative_imports :: proc(t: ^testing.T) {
-	root := "src/extractor/fixtures/basic"
+	root := "extractor/fixtures/basic"
 	workspace := Extract(Config{root_path = root, target_os = "linux", target_arch = "amd64", include_test_files = false})
 	defer Destroy(&workspace)
 	testing.expect(t, len(workspace.packages) == 2)
@@ -69,7 +69,7 @@ extract_discovers_tags_declarations_and_relative_imports :: proc(t: ^testing.T) 
 
 @(test)
 extract_excludes_nonmatching_platform_and_test_files :: proc(t: ^testing.T) {
-	workspace := Extract(Config{root_path = "src/extractor/fixtures/tags", target_os = "linux", target_arch = "amd64"})
+	workspace := Extract(Config{root_path = "extractor/fixtures/tags", target_os = "linux", target_arch = "amd64"})
 	defer Destroy(&workspace)
 	testing.expect(t, len(workspace.packages) == 1)
 	testing.expect(t, len(workspace.packages[0].files) == 1)
@@ -79,7 +79,7 @@ extract_excludes_nonmatching_platform_and_test_files :: proc(t: ^testing.T) {
 
 @(test)
 build_ignore_tag_excludes_a_file_before_package_validation :: proc(t: ^testing.T) {
-	workspace := Extract(Config{root_path = "src/extractor/fixtures/tags", target_os = "linux", target_arch = "amd64"})
+	workspace := Extract(Config{root_path = "extractor/fixtures/tags", target_os = "linux", target_arch = "amd64"})
 	defer Destroy(&workspace)
 	testing.expect(t, len(workspace.packages) == 1)
 	for diagnostic in workspace.diagnostics do testing.expect(t, diagnostic.kind != .Package_Mismatch, "#+build ignore must exclude the file before package validation")
@@ -87,7 +87,7 @@ build_ignore_tag_excludes_a_file_before_package_validation :: proc(t: ^testing.T
 
 @(test)
 extract_reports_relative_import_cycle :: proc(t: ^testing.T) {
-	workspace := Extract(Config{root_path = "src/extractor/fixtures/cycle", target_os = "linux", target_arch = "amd64"})
+	workspace := Extract(Config{root_path = "extractor/fixtures/cycle", target_os = "linux", target_arch = "amd64"})
 	defer Destroy(&workspace)
 	found := false
 	for diagnostic in workspace.diagnostics do if diagnostic.kind == .Import_Cycle do found = true
@@ -96,7 +96,7 @@ extract_reports_relative_import_cycle :: proc(t: ^testing.T) {
 
 @(test)
 lower_emits_valid_document_for_supported_source_subset :: proc(t: ^testing.T) {
-	workspace := Extract(Config{root_path = "src/extractor/fixtures/basic", target_os = "linux", target_arch = "amd64"})
+	workspace := Extract(Config{root_path = "extractor/fixtures/basic", target_os = "linux", target_arch = "amd64"})
 	defer Destroy(&workspace)
 	result := Lower(&workspace, {incomplete_policy = .Emit})
 	defer Lower_Result_Destroy(&result)
@@ -123,7 +123,7 @@ lower_emits_valid_document_for_supported_source_subset :: proc(t: ^testing.T) {
 
 @(test)
 lower_recognizes_literal_conversion_and_qualified_type_syntax :: proc(t: ^testing.T) {
-	workspace := Extract(Config{root_path = "src/extractor/fixtures/lowering", target_os = "linux", target_arch = "amd64"})
+	workspace := Extract(Config{root_path = "extractor/fixtures/lowering", target_os = "linux", target_arch = "amd64"})
 	defer Destroy(&workspace)
 	result := Lower(&workspace, {incomplete_policy = .Reject})
 	defer Lower_Result_Destroy(&result)
@@ -137,7 +137,7 @@ lower_recognizes_literal_conversion_and_qualified_type_syntax :: proc(t: ^testin
 
 @(test)
 lower_preserves_local_aliases_literal_variables_and_top_level_scope :: proc(t: ^testing.T) {
-	workspace := Extract(Config{root_path = "src/extractor/fixtures/source_facts", target_os = "linux", target_arch = "amd64"})
+	workspace := Extract(Config{root_path = "extractor/fixtures/source_facts", target_os = "linux", target_arch = "amd64"})
 	defer Destroy(&workspace)
 	testing.expect(t, len(workspace.packages) == 1 && len(workspace.packages[0].files[0].declarations) == 10, "nested declarations must not escape a procedure body")
 	result := Lower(&workspace, {incomplete_policy = .Reject})

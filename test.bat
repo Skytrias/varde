@@ -7,13 +7,13 @@ if errorlevel 1 (
   exit /b 2
 )
 
-odin test .
+odin test runtime
 if errorlevel 1 exit /b %errorlevel%
 
-odin test src\doc_format
+odin test doc_format
 if errorlevel 1 exit /b %errorlevel%
 
-odin test src\extractor
+odin test extractor
 if errorlevel 1 exit /b %errorlevel%
 
 echo All Varde tests passed.

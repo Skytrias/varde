@@ -4,9 +4,9 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strconv"
-import doc "../src/doc_format"
-import extractor "../src/extractor"
-import varde "../"
+import doc "../doc_format"
+import extractor "../extractor"
+import varde "../runtime"
 
 print_usage :: proc() {
 	fmt.eprintln("Usage:")

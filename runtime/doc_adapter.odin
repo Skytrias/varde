@@ -5,7 +5,7 @@ import "core:strings"
 import "core:testing"
 import "core:fmt"
 import "core:path/filepath"
-import doc "./src/doc_format"
+import doc "../doc_format"
 
 // Document_Model is the short-lived renderer adapter for one merged set of
 // .odin-doc inputs. It borrows semantic strings from the source documents and
