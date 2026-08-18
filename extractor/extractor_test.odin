@@ -138,9 +138,17 @@ lower_preserves_enum_cases_comments_and_values :: proc(t: ^testing.T) {
 	unknown := result.document.entities[enum_type.entities[0]]
 	ready := result.document.entities[enum_type.entities[1]]
 	failed := result.document.entities[enum_type.entities[2]]
-	testing.expect(t, unknown.name == "Unknown" && unknown.docs == "No state has been selected." && len(unknown.init_string) == 0, "enum case comments should be preserved")
-	testing.expect(t, ready.name == "Ready" && ready.init_string == "5" && ready.docs == "The system is ready.", "enum case values and comments should be preserved")
-	testing.expect(t, failed.name == "Failed", "unassigned enum cases should still be emitted")
+	testing.expect(t, unknown.name == "Unknown" && unknown.docs == "No state has been selected." && unknown.init_string == "0" && unknown.comment == "The implicit default.", "enum documentation and inline comments should be preserved")
+	testing.expect(t, ready.name == "Ready" && ready.init_string == "8" && ready.docs == "The system is ready.", "direct enum integer literals should render as their decimal value")
+	testing.expect(t, failed.name == "Failed" && failed.init_string == "9", "implicit enum values should be written out")
+	gamut := document_entity_by_name(&result.document, "BMP_Gamut_Mapping_Intent")
+	testing.expect(t, gamut != nil && len(result.document.types[gamut.type].entities) == 5, "enum fixture matching the image package should retain every field")
+	if gamut == nil do return
+	gamut_fields := result.document.types[gamut.type].entities
+	invalid := result.document.entities[gamut_fields[0]]
+	abs_colorimetric := result.document.entities[gamut_fields[1]]
+	testing.expect(t, invalid.name == "INVALID" && invalid.init_string == "0" && invalid.comment == "If not V5, this field will just be zero-initialized and not valid.", "inline enum field comments should survive source lowering")
+	testing.expect(t, abs_colorimetric.name == "ABS_COLORIMETRIC" && abs_colorimetric.init_string == "8", "hexadecimal enum values should render as the documented decimal value")
 }
 
 @(test)

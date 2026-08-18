@@ -210,18 +210,26 @@ document_append_record_entities :: proc(builder: ^strings.Builder, budget: ^Docu
 }
 
 document_append_enum_entities :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, typ: doc.Type, indent: int) {
+	name_width := document_entity_name_width(document, typ.entities[:])
 	for entity_index in typ.entities {
 		if budget.truncated do break
 		if entity_index == 0 || int(entity_index) >= len(document.entities) do continue
 		entity := document.entities[entity_index]
 		document_signature_write_docs(builder, budget, entity.docs, indent + 1)
 		document_signature_indent(builder, budget, indent + 1)
-		if len(entity.name) > 0 { document_signature_write(builder, budget, entity.name) } else { document_signature_write(builder, budget, "_") }
+		name := entity.name
+		if len(name) > 0 { document_signature_write(builder, budget, name) } else { name = "_"; document_signature_write(builder, budget, name) }
 		if len(entity.init_string) > 0 {
+			for _ in 0..<max(name_width-len(name), 0) do document_signature_write(builder, budget, " ")
 			document_signature_write(builder, budget, " = ")
 			document_signature_write(builder, budget, entity.init_string)
 		}
-		document_signature_write(builder, budget, ",\n")
+		document_signature_write(builder, budget, ",")
+		if comment := strings.trim_space(entity.comment); len(comment) > 0 {
+			if strings.has_prefix(comment, "//") { document_signature_write(builder, budget, " ") } else { document_signature_write(builder, budget, " // ") }
+			document_signature_write(builder, budget, comment)
+		}
+		document_signature_write(builder, budget, "\n")
 	}
 }
 
@@ -425,7 +433,7 @@ test_document_signature_renders_documented_enum_cases :: proc(t: ^testing.T) {
 	document := doc.Document_Init()
 	defer doc.Document_Destroy(&document)
 	append(&document.types, doc.Type{kind = 1, name = "u8", types = make([dynamic]u32, 0), entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
-	append(&document.entities, doc.Entity{kind = 1, name = "Unknown", docs = "No state has been selected.", attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
+	append(&document.entities, doc.Entity{kind = 1, name = "Unknown", init_string = "0", comment = "The implicit default.", docs = "No state has been selected.", attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
 	append(&document.entities, doc.Entity{kind = 1, name = "Ready", init_string = "5", docs = "The system is ready.", attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
 	cases := make([dynamic]u32, 0, 2)
 	append(&cases, 1)
@@ -437,5 +445,5 @@ test_document_signature_renders_documented_enum_cases :: proc(t: ^testing.T) {
 	defer strings.builder_destroy(&builder)
 	budget := Document_Signature_Budget{remaining = DOCUMENT_SIGNATURE_MAX_BYTES}
 	document_append_type(&builder, &budget, &document, 2, 0, 0)
-	testing.expect(t, strings.to_string(builder) == "enum u8 {\n\t// No state has been selected.\n\tUnknown,\n\t// The system is ready.\n\tReady = 5,\n}", "enum cases should render with their values and documentation")
+	testing.expect(t, strings.to_string(builder) == "enum u8 {\n\t// No state has been selected.\n\tUnknown = 0, // The implicit default.\n\t// The system is ready.\n\tReady   = 5,\n}", "enum cases should render with aligned values, inline comments, and documentation")
 }

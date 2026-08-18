@@ -2,6 +2,8 @@ package extractor
 
 import "core:mem"
 import "core:strings"
+import "core:fmt"
+import "core:strconv"
 import doc "../doc_format"
 
 // Incomplete_Policy makes the source-mode contract explicit. A full semantic
@@ -298,13 +300,15 @@ append_member :: proc(document: ^doc.Document, owner_index, file_index: u32, dec
 // fields they have no annotation. Keep their authored values and leading
 // comments so renderers can present an enum as a sequence of cases instead of
 // an empty record-like shell.
-append_enum_member :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, token: Token, initializer, docs: string, allocator: mem.Allocator) {
+append_enum_member :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, token: Token, initializer, comment, docs: string, allocator: mem.Allocator) {
 	if len(docs) > 0 do append(&document._owned_strings, docs)
+	if len(comment) > 0 do append(&document._owned_strings, comment)
 	entity := doc.Entity{
 		kind = 1,
 		pos = {file = file_index, line = u32(declaration.line + token.line - 1), column = u32(token.column), offset = u32(declaration.offset + token.offset)},
 		name = token.text,
 		init_string = initializer,
+		comment = comment,
 		docs = docs,
 		attributes = make([dynamic]doc.Attribute, 0, allocator),
 		grouped_entities = make([dynamic]u32, 0, allocator),
@@ -346,6 +350,44 @@ enum_member_initializer :: proc(tokens: []Token, member_index: int, source: stri
 		if nesting == 0 && (token.text == "," || token.text == ";" || token.kind == .Comment) { end = token.offset; break }
 	}
 	return strings.trim_space(source[start:end])
+}
+
+// A comment after the enum separator belongs to that case, whereas a comment
+// on the next line before a case becomes its documentation. This mirrors the
+// parser distinction that the public .odin-doc format exposes as `comment`
+// and `docs` respectively.
+enum_member_comment :: proc(tokens: []Token, member_index: int, allocator: mem.Allocator) -> string {
+	nesting := 0
+	for index := member_index + 1; index < len(tokens); index += 1 {
+		token := tokens[index]
+		if token.kind == .End do break
+		if token.text == "(" || token.text == "[" || token.text == "{" { nesting += 1; continue }
+		if token.text == ")" || token.text == "]" || token.text == "}" {
+			if nesting > 0 { nesting -= 1; continue }
+			break
+		}
+		if nesting != 0 do continue
+		if token.kind == .Comment do return comment_docs(tokens[index:index+1], allocator)
+		if token.text == "," || token.text == ";" {
+			if index+1 < len(tokens) && tokens[index+1].kind == .Comment && tokens[index+1].line == token.line do return comment_docs(tokens[index+1:index+2], allocator)
+			break
+		}
+	}
+	return ""
+}
+
+// Source mode is not a compiler, but direct integer literals and implicit
+// enum increments are complete syntactic facts. Canonicalizing those values
+// gives source-generated sites the same useful decimal values as .odin-doc
+// input without pretending to evaluate arbitrary expressions.
+enum_member_display_initializer :: proc(initializer: string, next_value: i64, has_next_value: bool) -> (value: string, next: i64, known: bool) {
+	text := strings.trim_space(initializer)
+	if len(text) == 0 {
+		if !has_next_value do return "", 0, false
+		return fmt.tprintf("%d", next_value), next_value + 1, true
+	}
+	if integer, ok := strconv.parse_int(text); ok do return fmt.tprintf("%d", integer), i64(integer) + 1, true
+	return text, 0, false
 }
 
 // parse_members recognizes direct `name: Type` members, including compound
@@ -404,6 +446,8 @@ parse_enum_members :: proc(document: ^doc.Document, owner_index, file_index: u32
 	depth := 0
 	previous_non_comment_line := 0
 	expecting_member := false
+	next_value := i64(0)
+	has_next_value := true // Odin assigns the first omitted enum value zero.
 	for index := open_index; index < len(tokens); index += 1 {
 		token := tokens[index]
 		if token.text == "{" { depth += 1; if depth == 1 do expecting_member = true; continue }
@@ -428,7 +472,13 @@ parse_enum_members :: proc(document: ^doc.Document, owner_index, file_index: u32
 		}
 		if expecting_member && token.kind == .Ident {
 			member_docs := comment_docs(pending_comments[:], allocator)
-			append_enum_member(document, owner_index, file_index, declaration, token, enum_member_initializer(tokens[:], index, declaration.source), member_docs, allocator)
+			initializer, next, known := enum_member_display_initializer(enum_member_initializer(tokens[:], index, declaration.source), next_value, has_next_value)
+			if known {
+				initializer = strings.clone(initializer, allocator)
+				append(&document._owned_strings, initializer)
+			}
+			append_enum_member(document, owner_index, file_index, declaration, token, initializer, enum_member_comment(tokens[:], index, allocator), member_docs, allocator)
+			next_value, has_next_value = next, known
 			clear(&pending_comments)
 			expecting_member = false
 		}
