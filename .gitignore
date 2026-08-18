@@ -1,0 +1,33 @@
+# macOS and editor state
+.DS_Store
+._*
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+*.swp
+*.swo
+*~
+
+# Local build and generated-site output
+/docs/
+dist/
+build/
+out/
+target/
+.varde-preview/
+_ci-site/
+_site/
+coverage/
+*.prof
+*.trace
+
+# Generated Odin documentation artifacts are local build products by default.
+# Checked-in compatibility fixtures belong under fixtures/.
+*.odin-doc
+!fixtures/**/*.odin-doc
+
+# Temporary files and local tool caches
+*.tmp
+*.temp
+.cache/

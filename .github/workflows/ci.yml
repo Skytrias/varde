@@ -1,0 +1,41 @@
+name: Verify Varde
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install pinned Odin compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ci/toolchains/odin-linux-amd64.env
+          curl --fail --location --retry 3 --retry-all-errors --output odin.tar.gz "$ODIN_LINUX_AMD64_URL"
+          echo "$ODIN_LINUX_AMD64_SHA256  odin.tar.gz" | sha256sum --check
+          mkdir odin
+          tar --extract --gzip --file odin.tar.gz --strip-components=1 --directory odin
+          rm odin.tar.gz
+          echo "$GITHUB_WORKSPACE/odin" >> "$GITHUB_PATH"
+
+      - name: Test, build, and smoke-test source documentation
+        run: |
+          set -euo pipefail
+          odin version
+          make test
+          make build-cli
+          test -s dist/varde
+          ./dist/varde build --source . --allow-incomplete --out _ci-site
+          test -f _ci-site/index.html
+          test -f _ci-site/varde-site-manifest.json

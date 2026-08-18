@@ -1,0 +1,296 @@
+package main
+
+import "core:fmt"
+import "core:os"
+import "core:path/filepath"
+import "core:strconv"
+import doc "../src/doc_format"
+import extractor "../src/extractor"
+import varde "../"
+
+print_usage :: proc() {
+	fmt.eprintln("Usage:")
+	fmt.eprintln("  varde inspect <file.odin-doc> [...more.odin-doc]")
+	fmt.eprintln("  varde scan --source <directory> [--target-os <os>] [--target-arch <arch>] [--include-tests]")
+	fmt.eprintln("  varde extract --source <directory> --out <file.odin-doc> [--allow-incomplete] [--target-os <os>] [--target-arch <arch>] [--include-tests]")
+	fmt.eprintln("  varde build --doc <file.odin-doc> [--doc <file.odin-doc> ...] [--workspace <path>] [--sloc <count>] [--out <relative-output-dir>]")
+	fmt.eprintln("  varde build --source <directory> [--allow-incomplete] [--emit-doc <file.odin-doc>] [--target-os <os>] [--target-arch <arch>] [--include-tests] [--out <relative-output-dir>]")
+}
+
+scan_source :: proc(root_path, target_os, target_arch: string, include_tests: bool) {
+	workspace := extractor.Extract(extractor.Config{
+		root_path = root_path,
+		target_os = target_os,
+		target_arch = target_arch,
+		include_test_files = include_tests,
+	})
+	defer extractor.Destroy(&workspace)
+	file_count, import_count, declaration_count := 0, 0, 0
+	for pkg in workspace.packages {
+		fmt.printf("- %s (%s)\n", pkg.name, pkg.path)
+		for file in pkg.files {
+			file_count += 1
+			import_count += len(file.imports)
+			declaration_count += len(file.declarations)
+		}
+	}
+	fmt.printf("Packages: %d\nFiles: %d\nSLOC: %d\nImports: %d\nDeclarations: %d\nDiagnostics: %d\n", len(workspace.packages), file_count, workspace.sloc, import_count, declaration_count, len(workspace.diagnostics))
+	for diagnostic in workspace.diagnostics {
+		fmt.eprintf("%s(%d:%d): %s\n", diagnostic.path, diagnostic.line, diagnostic.column, diagnostic.message)
+	}
+}
+
+write_document_file :: proc(document: ^doc.Document, output_path: string) -> bool {
+	data, write_err := doc.Write(document)
+	defer delete(data)
+	if write_err.kind != .None { fmt.eprintf("Could not serialize .odin-doc: %s\n", doc.error_string(write_err)); return false }
+	if directory := filepath.dir(output_path); len(directory) > 0 {
+		if directory_err := os.make_directory_all(directory); directory_err != nil && directory_err != .Exist { fmt.eprintf("Could not create output directory: %v\n", directory_err); return false }
+	}
+	if output_err := os.write_entire_file(output_path, data[:]); output_err != nil { fmt.eprintf("Could not write %q: %v\n", output_path, output_err); return false }
+	return true
+}
+
+print_source_diagnostics :: proc(workspace: extractor.Workspace, result: extractor.Lower_Result) {
+	for diagnostic in workspace.diagnostics do fmt.eprintf("%s(%d:%d): %s\n", diagnostic.path, diagnostic.line, diagnostic.column, diagnostic.message)
+	for diagnostic in result.diagnostics do fmt.eprintf("%s(%d:%d): %s\n", diagnostic.path, diagnostic.line, diagnostic.column, diagnostic.message)
+}
+
+extract_source :: proc(root_path, output_path, target_os, target_arch: string, include_tests, allow_incomplete: bool) {
+	workspace := extractor.Extract(extractor.Config{root_path = root_path, target_os = target_os, target_arch = target_arch, include_test_files = include_tests})
+	defer extractor.Destroy(&workspace)
+	result := extractor.Lower(&workspace, {incomplete_policy = allow_incomplete ? .Emit : .Reject})
+	defer extractor.Lower_Result_Destroy(&result)
+	print_source_diagnostics(workspace, result)
+	if !result.complete && !allow_incomplete { fmt.eprintln("Refusing to emit an incomplete .odin-doc. Fix diagnostics or pass --allow-incomplete explicitly."); return }
+	if !write_document_file(&result.document, output_path) do return
+	status := "complete"
+	if !result.complete do status = "incomplete (explicitly allowed)"
+	fmt.printf("Wrote %s .odin-doc with %d packages, %d declarations, and %d SLOC to %s\n", status, len(result.document.packages)-1, len(result.document.entities)-1, workspace.sloc, output_path)
+}
+
+build_from_source :: proc(root_path, output_dir, emit_doc_path, target_os, target_arch: string, include_tests, allow_incomplete: bool) {
+	built := varde.Runtime_Build({
+		source_path = root_path,
+		output_dir = output_dir,
+		emit_doc_path = emit_doc_path,
+		target_os = target_os,
+		target_arch = target_arch,
+		include_test_files = include_tests,
+		allow_incomplete = allow_incomplete,
+		load_project_config = true,
+	})
+	defer varde.Runtime_Build_Result_Destroy(&built)
+	print_runtime_diagnostics(built)
+	if !built.ok { fmt.eprintf("Varde build failed: %s\n", built.error_message); return }
+	status := "complete"
+	if !built.complete do status = "incomplete (explicitly allowed)"
+	fmt.printf("Built %s source site with %d packages and %d entries at %s\n", status, built.package_count, built.entry_count, built.output_path)
+}
+
+print_runtime_diagnostics :: proc(result: varde.Runtime_Build_Result) {
+	for diagnostic in result.diagnostics {
+		if len(diagnostic.path) > 0 && diagnostic.line > 0 {
+			fmt.eprintf("%s(%d:%d): %s\n", diagnostic.path, diagnostic.line, diagnostic.column, diagnostic.message)
+		} else if len(diagnostic.path) > 0 {
+			fmt.eprintf("%s: %s\n", diagnostic.path, diagnostic.message)
+		} else {
+			fmt.eprintln(diagnostic.message)
+		}
+	}
+}
+
+load_workspace :: proc(paths: []string) -> ([dynamic]doc.Document, doc.Workspace, doc.Error) {
+	documents := make([dynamic]doc.Document, 0, len(paths))
+	for path in paths {
+		data, read_err := os.read_entire_file(path, context.allocator)
+		if read_err != nil {
+			fmt.eprintf("Could not read %q: %v\n", path, read_err)
+			for &document in documents do doc.Document_Destroy(&document)
+			delete(documents)
+			return nil, {}, {kind = .Invalid_Offset}
+		}
+		document, format_err := doc.Read(data)
+		delete(data)
+		if format_err.kind != .None {
+			fmt.eprintf("Invalid .odin-doc %q: %s\n", path, doc.error_string(format_err))
+			for &prior in documents do doc.Document_Destroy(&prior)
+			delete(documents)
+			return nil, {}, format_err
+		}
+		append(&documents, document)
+	}
+	document_refs := make([dynamic]^doc.Document, 0, len(documents))
+	defer delete(document_refs)
+	for &document in documents do append(&document_refs, &document)
+	workspace, merge_err := doc.Merge(document_refs[:])
+	if merge_err.kind != .None {
+		for &document in documents do doc.Document_Destroy(&document)
+		delete(documents)
+		return nil, {}, merge_err
+	}
+	return documents, workspace, {}
+}
+
+destroy_loaded_workspace :: proc(documents: ^[dynamic]doc.Document, workspace: ^doc.Workspace) {
+	if workspace != nil do doc.Workspace_Destroy(workspace)
+	if documents != nil {
+		for &document in documents^ do doc.Document_Destroy(&document)
+		delete(documents^)
+	}
+}
+
+inspect :: proc(paths: []string) {
+	documents, workspace, merge_err := load_workspace(paths)
+	if merge_err.kind != .None do return
+	defer destroy_loaded_workspace(&documents, &workspace)
+	fmt.printf("Valid Odin doc format %d.%d.%d\n", doc.VERSION_MAJOR, doc.VERSION_MINOR, doc.VERSION_PATCH)
+	fmt.printf("Documents: %d\nSelected packages: %d\nDuplicate choices: %d\n", len(documents), len(workspace.packages), len(workspace.diagnostics))
+	for item in workspace.packages {
+		package_path := doc.Workspace_Package_Path(&workspace, item)
+		fmt.printf("- %s (%d public entries; document %d)\n", package_path, item.public_entry_count, item.document_index + 1)
+	}
+}
+
+build_from_documents :: proc(paths: []string, workspace_path, output_dir: string, sloc: int) {
+	result := varde.Runtime_Build({
+		document_paths = paths,
+		workspace_path = workspace_path,
+		output_dir = output_dir,
+		load_project_config = true,
+		document_sloc = sloc,
+	})
+	defer varde.Runtime_Build_Result_Destroy(&result)
+	print_runtime_diagnostics(result)
+	if !result.ok {
+		fmt.eprintf("Varde build failed: %s\n", result.error_message)
+		return
+	}
+	fmt.printf("Built %d packages and %d entries at %s\n", result.package_count, result.entry_count, result.output_path)
+}
+
+main :: proc() {
+	if len(os.args) < 2 {
+		print_usage()
+		return
+	}
+	args := os.args[1:]
+	if args[0] == "inspect" {
+		if len(args) < 2 { print_usage(); return }
+		inspect(args[1:])
+		return
+	}
+	if args[0] == "scan" {
+		root_path, target_os, target_arch := "", "", ""
+		include_tests := false
+		for index := 1; index < len(args); index += 1 {
+			switch args[index] {
+			case "--source":
+				if index + 1 >= len(args) { print_usage(); return }
+				index += 1
+				root_path = args[index]
+			case "--target-os":
+				if index + 1 >= len(args) { print_usage(); return }
+				index += 1
+				target_os = args[index]
+			case "--target-arch":
+				if index + 1 >= len(args) { print_usage(); return }
+				index += 1
+				target_arch = args[index]
+			case "--include-tests": include_tests = true
+			case:
+				fmt.eprintf("Unknown scan option: %s\n", args[index])
+				print_usage()
+				return
+			}
+		}
+		if len(root_path) == 0 { print_usage(); return }
+		scan_source(root_path, target_os, target_arch, include_tests)
+		return
+	}
+	if args[0] == "extract" {
+		root_path, output_path, target_os, target_arch := "", "", "", ""
+		include_tests, allow_incomplete := false, false
+		for index := 1; index < len(args); index += 1 {
+			switch args[index] {
+			case "--source":
+				if index + 1 >= len(args) { print_usage(); return }; index += 1; root_path = args[index]
+			case "--out":
+				if index + 1 >= len(args) { print_usage(); return }; index += 1; output_path = args[index]
+			case "--target-os":
+				if index + 1 >= len(args) { print_usage(); return }; index += 1; target_os = args[index]
+			case "--target-arch":
+				if index + 1 >= len(args) { print_usage(); return }; index += 1; target_arch = args[index]
+			case "--include-tests": include_tests = true
+			case "--allow-incomplete": allow_incomplete = true
+			case:
+				fmt.eprintf("Unknown extract option: %s\n", args[index]); print_usage(); return
+			}
+		}
+		if len(root_path) == 0 || len(output_path) == 0 { print_usage(); return }
+		extract_source(root_path, output_path, target_os, target_arch, include_tests, allow_incomplete)
+		return
+	}
+	if args[0] != "build" {
+		// Retain the first inspector prototype's concise invocation.
+		inspect(args)
+		return
+	}
+	doc_paths := make([dynamic]string, 0, 2)
+	defer delete(doc_paths)
+	workspace_path, source_path, emit_doc_path, target_os, target_arch := ".", "", "", "", ""
+	output_dir := "dist/varde"
+	document_sloc := 0
+	include_tests, allow_incomplete := false, false
+	for index := 1; index < len(args); index += 1 {
+		switch args[index] {
+		case "--doc":
+			if index + 1 >= len(args) { print_usage(); return }
+			index += 1
+			append(&doc_paths, args[index])
+		case "--source":
+			if index + 1 >= len(args) { print_usage(); return }
+			index += 1
+			source_path = args[index]
+		case "--emit-doc":
+			if index + 1 >= len(args) { print_usage(); return }
+			index += 1
+			emit_doc_path = args[index]
+		case "--target-os":
+			if index + 1 >= len(args) { print_usage(); return }
+			index += 1
+			target_os = args[index]
+		case "--target-arch":
+			if index + 1 >= len(args) { print_usage(); return }
+			index += 1
+			target_arch = args[index]
+		case "--include-tests": include_tests = true
+		case "--allow-incomplete": allow_incomplete = true
+		case "--workspace":
+			if index + 1 >= len(args) { print_usage(); return }
+			index += 1
+			workspace_path = args[index]
+		case "--sloc":
+			if index + 1 >= len(args) { print_usage(); return }
+			index += 1
+			parsed_sloc, ok := strconv.parse_int(args[index])
+			if !ok || parsed_sloc < 0 { fmt.eprintln("--sloc must be a non-negative integer"); return }
+			document_sloc = parsed_sloc
+		case "--out":
+			if index + 1 >= len(args) { print_usage(); return }
+			index += 1
+			output_dir = args[index]
+		case:
+			fmt.eprintf("Unknown build option: %s\n", args[index])
+			print_usage()
+			return
+		}
+	}
+	if len(source_path) > 0 {
+		if len(doc_paths) > 0 { fmt.eprintln("Choose exactly one input mode: --source or --doc."); return }
+		build_from_source(source_path, output_dir, emit_doc_path, target_os, target_arch, include_tests, allow_incomplete)
+		return
+	}
+	if len(doc_paths) == 0 { print_usage(); return }
+	build_from_documents(doc_paths[:], workspace_path, output_dir, document_sloc)
+}
