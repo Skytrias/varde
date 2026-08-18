@@ -134,7 +134,32 @@ test_document_signature_budget_truncates_unbounded_input :: proc(t: ^testing.T) 
 	testing.expect(t, strings.to_string(builder) == "a…" && budget.truncated, "signature rendering should stop at its display budget")
 }
 
-document_append_entities :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, values: []u32, depth: int) {
+document_signature_indent :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, indent: int) {
+	for _ in 0..<indent do document_signature_write(builder, budget, "\t")
+}
+
+document_signature_write_docs :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, docs: string, indent: int) {
+	remaining := strings.trim_right_space(docs)
+	for len(remaining) > 0 && !budget.truncated {
+		line, _, tail := strings.partition(remaining, "\n")
+		document_signature_indent(builder, budget, indent)
+		document_signature_write(builder, budget, "// ")
+		document_signature_write(builder, budget, strings.trim_right_space(line))
+		document_signature_write(builder, budget, "\n")
+		remaining = tail
+	}
+}
+
+document_entity_name_width :: proc(document: ^doc.Document, values: []u32) -> int {
+	if document == nil do return 0
+	width := 0
+	for entity_index in values {
+		if entity_index > 0 && int(entity_index) < len(document.entities) do width = max(width, len(document.entities[entity_index].name))
+	}
+	return width
+}
+
+document_append_entities_inline :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, values: []u32, depth, indent: int) {
 	for entity_index, index in values {
 		if budget.truncated do break
 		if index > 0 do document_signature_write(builder, budget, ", ")
@@ -146,7 +171,7 @@ document_append_entities :: proc(builder: ^strings.Builder, budget: ^Document_Si
 		if len(entity.name) > 0 do document_signature_write(builder, budget, entity.name)
 		if entity.type != 0 {
 			if len(entity.name) > 0 do document_signature_write(builder, budget, ": ")
-			document_append_type(builder, budget, document, entity.type, depth + 1)
+			document_append_type(builder, budget, document, entity.type, depth + 1, indent)
 		}
 		if len(entity.init_string) > 0 {
 			document_signature_write(builder, budget, " = ")
@@ -155,11 +180,38 @@ document_append_entities :: proc(builder: ^strings.Builder, budget: ^Document_Si
 	}
 }
 
-document_append_type_child :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, typ: doc.Type, index, depth: int) {
-	document_append_type(builder, budget, document, document_type_at(document, typ, index), depth + 1)
+document_append_record_entities :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, typ: doc.Type, depth, indent: int) {
+	name_width := document_entity_name_width(document, typ.entities[:])
+	for entity_index, index in typ.entities {
+		if budget.truncated do break
+		if entity_index == 0 || int(entity_index) >= len(document.entities) do continue
+		entity := document.entities[entity_index]
+		document_signature_write_docs(builder, budget, entity.docs, indent + 1)
+		document_signature_indent(builder, budget, indent + 1)
+		if len(entity.name) > 0 {
+			document_signature_write(builder, budget, entity.name)
+			document_signature_write(builder, budget, ": ")
+			for _ in 0..<max(name_width-len(entity.name), 0) do document_signature_write(builder, budget, " ")
+		}
+		document_append_type(builder, budget, document, entity.type, depth + 1, indent + 1)
+		if len(entity.init_string) > 0 {
+			document_signature_write(builder, budget, " = ")
+			document_signature_write(builder, budget, entity.init_string)
+		}
+		if index < len(typ.tags) && len(typ.tags[index]) > 0 {
+			document_signature_write(builder, budget, " `")
+			document_signature_write(builder, budget, typ.tags[index])
+			document_signature_write(builder, budget, "`")
+		}
+		document_signature_write(builder, budget, ",\n")
+	}
 }
 
-document_append_type :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, type_index: u32, depth: int) {
+document_append_type_child :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, typ: doc.Type, index, depth, indent: int) {
+	document_append_type(builder, budget, document, document_type_at(document, typ, index), depth + 1, indent)
+}
+
+document_append_type :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, type_index: u32, depth, indent: int) {
 	if budget.truncated do return
 	if document == nil || type_index == 0 || int(type_index) >= len(document.types) { document_signature_write(builder, budget, "_"); return }
 	// Anonymous structural types can recursively embed other anonymous types.
@@ -170,60 +222,70 @@ document_append_type :: proc(builder: ^strings.Builder, budget: ^Document_Signat
 	switch typ.kind {
 	case 1, 2, 3:
 		if len(typ.name) > 0 { document_signature_write(builder, budget, typ.name) } else { document_signature_write(builder, budget, "_") }
-	case 4: document_signature_write(builder, budget, "^"); document_append_type_child(builder, budget, document, typ, 0, depth)
-	case 22: document_signature_write(builder, budget, "[^]"); document_append_type_child(builder, budget, document, typ, 0, depth)
-	case 24: document_signature_write(builder, budget, "#soa^"); document_append_type_child(builder, budget, document, typ, 0, depth)
+	case 4: document_signature_write(builder, budget, "^"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+	case 22: document_signature_write(builder, budget, "[^]"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+	case 24: document_signature_write(builder, budget, "#soa^"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
 	case 5:
 		document_signature_write(builder, budget, "[")
-		if len(typ.types) > 1 { document_append_type_child(builder, budget, document, typ, 1, depth) } else { document_signature_write_int(builder, budget, int(typ.elem_counts[0])) }
-		document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 0, depth)
-	case 6: document_signature_write(builder, budget, "["); document_append_type_child(builder, budget, document, typ, 0, depth); document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 1, depth)
-	case 7: document_signature_write(builder, budget, "[]"); document_append_type_child(builder, budget, document, typ, 0, depth)
-	case 8: document_signature_write(builder, budget, "[dynamic]"); document_append_type_child(builder, budget, document, typ, 0, depth)
+		if len(typ.types) > 1 { document_append_type_child(builder, budget, document, typ, 1, depth, indent) } else { document_signature_write_int(builder, budget, int(typ.elem_counts[0])) }
+		document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+	case 6: document_signature_write(builder, budget, "["); document_append_type_child(builder, budget, document, typ, 0, depth, indent); document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 1, depth, indent)
+	case 7: document_signature_write(builder, budget, "[]"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+	case 8: document_signature_write(builder, budget, "[dynamic]"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
 	case 26:
 		document_signature_write(builder, budget, "[dynamic; ")
-		if len(typ.types) > 1 { document_append_type_child(builder, budget, document, typ, 1, depth) } else { document_signature_write_int(builder, budget, int(typ.elem_counts[0])) }
-		document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 0, depth)
-	case 9: document_signature_write(builder, budget, "map["); document_append_type_child(builder, budget, document, typ, 0, depth); document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 1, depth)
+		if len(typ.types) > 1 { document_append_type_child(builder, budget, document, typ, 1, depth, indent) } else { document_signature_write_int(builder, budget, int(typ.elem_counts[0])) }
+		document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+	case 9: document_signature_write(builder, budget, "map["); document_append_type_child(builder, budget, document, typ, 0, depth, indent); document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 1, depth, indent)
 	case 10:
 		document_signature_write(builder, budget, "struct {")
-		if len(typ.entities) > 0 { document_signature_write(builder, budget, " "); document_append_entities(builder, budget, document, typ.entities[:], depth + 1); document_signature_write(builder, budget, " ") }
+		if len(typ.entities) > 0 { document_signature_write(builder, budget, "\n"); document_append_record_entities(builder, budget, document, typ, depth + 1, indent); document_signature_indent(builder, budget, indent) }
 		document_signature_write(builder, budget, "}")
 	case 11:
 		document_signature_write(builder, budget, "union {")
-		for child_index, index in typ.types { if budget.truncated do break; if index > 0 do document_signature_write(builder, budget, ", "); document_append_type(builder, budget, document, child_index, depth + 1) }
+		if len(typ.types) > 0 {
+			document_signature_write(builder, budget, "\n")
+			for child_index in typ.types { if budget.truncated do break; document_signature_indent(builder, budget, indent + 1); document_append_type(builder, budget, document, child_index, depth + 1, indent + 1); document_signature_write(builder, budget, ",\n") }
+			document_signature_indent(builder, budget, indent)
+		}
 		document_signature_write(builder, budget, "}")
 	case 12:
 		document_signature_write(builder, budget, "enum")
-		if len(typ.types) > 0 { document_signature_write(builder, budget, " "); document_append_type_child(builder, budget, document, typ, 0, depth) }
+		if len(typ.types) > 0 { document_signature_write(builder, budget, " "); document_append_type_child(builder, budget, document, typ, 0, depth, indent) }
 		document_signature_write(builder, budget, " {")
-		if len(typ.entities) > 0 { document_signature_write(builder, budget, " "); document_append_entities(builder, budget, document, typ.entities[:], depth + 1); document_signature_write(builder, budget, " ") }
+		if len(typ.entities) > 0 { document_signature_write(builder, budget, "\n"); document_append_record_entities(builder, budget, document, typ, depth + 1, indent); document_signature_indent(builder, budget, indent) }
 		document_signature_write(builder, budget, "}")
 	case 13:
 		document_signature_write(builder, budget, "(")
 		if len(typ.entities) > 0 {
-			document_append_entities(builder, budget, document, typ.entities[:], depth + 1)
+			if len(typ.entities) >= 6 {
+				document_signature_write(builder, budget, "\n")
+				document_append_record_entities(builder, budget, document, typ, depth + 1, indent)
+				document_signature_indent(builder, budget, indent)
+			} else {
+				document_append_entities_inline(builder, budget, document, typ.entities[:], depth + 1, indent)
+			}
 		} else {
 			for type_index, index in typ.types {
 				if budget.truncated do break
 				if index > 0 do document_signature_write(builder, budget, ", ")
-				document_append_type(builder, budget, document, type_index, depth + 1)
+				document_append_type(builder, budget, document, type_index, depth + 1, indent)
 			}
 		}
 		document_signature_write(builder, budget, ")")
 	case 14:
 		document_signature_write(builder, budget, "proc")
-		document_append_type_child(builder, budget, document, typ, 0, depth)
-		if len(typ.types) > 1 && document_type_at(document, typ, 1) != 0 { document_signature_write(builder, budget, " -> "); document_append_type_child(builder, budget, document, typ, 1, depth) }
+		document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+		if len(typ.types) > 1 && document_type_at(document, typ, 1) != 0 { document_signature_write(builder, budget, " -> "); document_append_type_child(builder, budget, document, typ, 1, depth, indent) }
 	case 15:
-		document_signature_write(builder, budget, "bit_set["); document_append_type_child(builder, budget, document, typ, 0, depth)
+		document_signature_write(builder, budget, "bit_set["); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
 		if typ.elem_count_len > 0 { document_signature_write(builder, budget, "; "); document_signature_write_int(builder, budget, int(typ.elem_counts[0])); if typ.elem_count_len > 1 { document_signature_write(builder, budget, ".."); document_signature_write_int(builder, budget, int(typ.elem_counts[1])) } }
 		document_signature_write(builder, budget, "]")
-	case 16: document_signature_write(builder, budget, "#simd["); document_signature_write_int(builder, budget, int(typ.elem_counts[0])); document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 0, depth)
-	case 17, 18, 19: document_signature_write(builder, budget, "#soa"); document_append_type_child(builder, budget, document, typ, 0, depth)
-	case 20, 21: document_signature_write(builder, budget, "#relative"); document_append_type_child(builder, budget, document, typ, 0, depth)
-	case 23: document_signature_write(builder, budget, "matrix["); document_signature_write_int(builder, budget, int(typ.elem_counts[0])); document_signature_write(builder, budget, ", "); document_signature_write_int(builder, budget, int(typ.elem_counts[1])); document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 0, depth)
-	case 25: document_signature_write(builder, budget, "bit_field "); document_append_type_child(builder, budget, document, typ, 0, depth)
+	case 16: document_signature_write(builder, budget, "#simd["); document_signature_write_int(builder, budget, int(typ.elem_counts[0])); document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+	case 17, 18, 19: document_signature_write(builder, budget, "#soa"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+	case 20, 21: document_signature_write(builder, budget, "#relative"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+	case 23: document_signature_write(builder, budget, "matrix["); document_signature_write_int(builder, budget, int(typ.elem_counts[0])); document_signature_write(builder, budget, ", "); document_signature_write_int(builder, budget, int(typ.elem_counts[1])); document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+	case 25: document_signature_write(builder, budget, "bit_field "); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
 	case: document_signature_write(builder, budget, "_")
 	}
 }
@@ -237,9 +299,9 @@ document_signature :: proc(adapter: ^Document_Model, document: ^doc.Document, en
 	case 1, 2, 3:
 		document_signature_write(&builder, &budget, " :: ")
 		if entity.kind == 3 && entity.type != 0 && int(entity.type) < len(document.types) && document.types[entity.type].kind == 2 && len(document.types[entity.type].types) > 0 {
-			document_append_type(&builder, &budget, document, document.types[entity.type].types[0], 0)
+			document_append_type(&builder, &budget, document, document.types[entity.type].types[0], 0, 0)
 		} else {
-			document_append_type(&builder, &budget, document, entity.type, 0)
+			document_append_type(&builder, &budget, document, entity.type, 0, 0)
 		}
 		if len(entity.init_string) > 0 {
 			document_signature_write(&builder, &budget, " = ")
@@ -247,7 +309,7 @@ document_signature :: proc(adapter: ^Document_Model, document: ^doc.Document, en
 		}
 	case 4:
 		document_signature_write(&builder, &budget, " :: ")
-		document_append_type(&builder, &budget, document, entity.type, 0)
+		document_append_type(&builder, &budget, document, entity.type, 0, 0)
 	case 5:
 		document_signature_write(&builder, &budget, " :: proc group")
 	}
@@ -314,8 +376,10 @@ test_doc_workspace_adapter_preserves_package_docs_and_source_positions :: proc(t
 	append(&document.entities, doc.Entity{kind = 3, pos = {file = 1, line = 9}, name = "Record", type = 2, attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
 	append(&document.entities, doc.Entity{kind = 2, pos = {file = 1, line = 10}, name = "value", type = 1, attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
 	append(&document.types, doc.Type{kind = 1, name = "int", types = make([dynamic]u32, 0), entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
-	struct_entities := make([dynamic]u32, 0, 1)
+	append(&document.entities, doc.Entity{kind = 2, pos = {file = 1, line = 11}, name = "height", type = 1, docs = "Vertical extent.", attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
+	struct_entities := make([dynamic]u32, 0, 2)
 	append(&struct_entities, 3)
+	append(&struct_entities, 4)
 	append(&document.types, doc.Type{kind = 10, entities = struct_entities, types = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
 	documents := [1]^doc.Document{&document}
 	workspace, merge_err := doc.Merge(documents[:])
@@ -331,5 +395,5 @@ test_doc_workspace_adapter_preserves_package_docs_and_source_positions :: proc(t
 	entry := adapter.model.packages[0].files[0].entries[0]
 	testing.expect(t, entry.name == "Answer" && entry.signature == "Answer :: int = 42" && entry.source_line == 7, "entries should preserve a usable signature and source position")
 	structured := adapter.model.packages[0].files[0].entries[1]
-	testing.expect(t, structured.signature == "Record :: struct { value: int }", "type declarations should render their structured type graph")
+	testing.expect(t, structured.signature == "Record :: struct {\n\tvalue:  int,\n\t// Vertical extent.\n\theight: int,\n}", "type declarations should render structured type graphs as readable code")
 }
