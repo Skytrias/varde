@@ -18,18 +18,28 @@ actual code, tests, documentation, and release practice.
 
 - Read, validate, write, and deterministically merge `.odin-doc` format 0.3.2
   artifacts.
-- Build offline static documentation sites from compatible artifacts.
-- Discover a focused subset of Odin source packages and declarations.
+- Build offline, `file://`-compatible static documentation sites from
+  compatible artifacts, with directory-style package routes.
+- Discover target-appropriate Odin source files using build tags and trailing
+  platform suffixes such as `_js.odin` and `_linux_amd64.odin`.
+- Lower documented structs, enums, unions, bit sets, bit fields, array and
+  pointer type declarations, and procedure groups into structured document
+  data. Member documentation, inline comments, enum values, indentation, and
+  source positions are retained where the source syntax establishes them.
+- Render those structured declarations as readable source-like signatures,
+  including procedure groups such as `load :: proc{load_from_bytes,
+  load_from_file}`.
 - Build a site directly from source when all required facts can be established
-  without compiler execution.
+  without compiler execution, or emit an explicitly incomplete site with
+  `--allow-incomplete`.
 
 ## Important limitations
 
 Source mode is experimental and is not compiler-equivalent. It does not yet
-cover the full Odin grammar, semantic resolution, visibility, attributes,
-aliases/re-exports, or complete import and collection behaviour. Varde reports
-facts it cannot establish and refuses incomplete output unless
-`--allow-incomplete` is supplied.
+cover the full Odin grammar, semantic resolution, complete visibility and
+attribute handling, aliases/re-exports, or complete import and collection
+behaviour. Varde reports facts it cannot establish and refuses incomplete
+output unless `--allow-incomplete` is supplied.
 
 The project intentionally does not invoke, download, bundle, or discover an
 Odin executable at Varde runtime. Odin is needed only to compile Varde itself.
@@ -53,7 +63,7 @@ make test
 make build-cli
 
 # Build an offline site from this source tree.
-./dist/varde build --source . --out dist/varde
+./dist/varde build --source . --allow-incomplete --out .varde-preview/site
 
 # Inspect or render a compatible document artifact.
 ./dist/varde inspect path/to/project.odin-doc
