@@ -565,6 +565,7 @@ write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render
 	previous_kind := tokenizer.Token_Kind.Invalid
 	previous_ident := ""
 	selector_alias := ""
+	directive_name_follows := false
 	for {
 		token := tokenizer.scan(&lexer)
 		if token.kind == .EOF do break
@@ -577,9 +578,12 @@ write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render
 			continue
 		}
 
+		is_directive := text == "#" || directive_name_follows
+		class := odin_token_class(token.kind)
+		if is_directive do class = "tok-directive"
 		href := ""
 		linked := false
-		if token.kind == .Ident {
+		if token.kind == .Ident && !is_directive {
 			if len(selector_alias) > 0 {
 				href, linked = site_internal_href(ctx, strings.concatenate({selector_alias, ".", text}, context.temp_allocator), false)
 			} else {
@@ -587,15 +591,16 @@ write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render
 			}
 		}
 		if linked {
-			strings.write_string(builder, "<a class=\"tok-link "); strings.write_string(builder, odin_token_class(token.kind)); strings.write_string(builder, "\" href=\"")
+			strings.write_string(builder, "<a class=\"tok-link "); strings.write_string(builder, class); strings.write_string(builder, "\" href=\"")
 			html_attr(builder, href)
 			strings.write_string(builder, "\">"); html_text(builder, text); strings.write_string(builder, "</a>")
 		} else {
-			strings.write_string(builder, "<span class=\""); strings.write_string(builder, odin_token_class(token.kind)); strings.write_string(builder, "\">")
+			strings.write_string(builder, "<span class=\""); strings.write_string(builder, class); strings.write_string(builder, "\">")
 			html_text(builder, text)
 			strings.write_string(builder, "</span>")
 		}
 		cursor = max(cursor, end)
+		directive_name_follows = text == "#"
 		if token.kind == .Period && previous_kind == .Ident {
 			selector_alias = previous_ident
 		} else if token.kind == .Ident {
@@ -1466,11 +1471,12 @@ test_internal_links_resolve_only_local_or_imported_targets :: proc(t: ^testing.T
 	testing.expect(t, !unknown_ok, "unresolved references should remain readable rather than inventing a URL")
 	code: strings.Builder
 	defer strings.builder_destroy(&code)
-	write_odin_code(&code, "proc(value: ui.Element) -> Local", ctx)
+	write_odin_code(&code, "proc(value: ui.Element) -> Local #packed", ctx)
 	rendered := strings.to_string(code)
 	testing.expect(t, strings.contains(rendered, "class=\"tok-keyword\">proc"), "Odin keywords should receive syntax classes")
 	testing.expect(t, strings.contains(rendered, "../../ui/index.html#element"), "qualified imported identifiers should link in highlighted code")
 	testing.expect(t, strings.contains(rendered, "href=\"#local\""), "local identifiers should link in highlighted code")
+	testing.expect(t, strings.contains(rendered, "class=\"tok-directive\">#</span><span class=\"tok-directive\">packed"), "Odin directives should retain a single directive color")
 }
 
 @(test)

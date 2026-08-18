@@ -107,15 +107,15 @@ Type :: struct {
 	tags:               [dynamic]string,
 }
 
-// Document owns its strings and nested dynamic arrays only after Read. Use
-// Document_Destroy for documents returned from Read; manually built documents
-// may borrow literals and should not be destroyed unless their ownership is
-// made explicit by a future semantic-model constructor.
+// Document owns its parsed table strings after Read. Source lowering may also
+// register separately allocated strings in _owned_strings; other manually
+// constructed fields may still borrow their source workspace.
 Document :: struct {
 	files:      [dynamic]File,
 	packages:   [dynamic]Package,
 	entities:   [dynamic]Entity,
 	types:      [dynamic]Type,
+	_owned_strings: [dynamic]string,
 	_owns_data: bool,
 }
 
@@ -156,6 +156,7 @@ Document_Init :: proc(allocator: mem.Allocator = context.allocator) -> Document 
 		packages = make([dynamic]Package, 0, 8, allocator),
 		entities = make([dynamic]Entity, 0, 16, allocator),
 		types = make([dynamic]Type, 0, 16, allocator),
+		_owned_strings = make([dynamic]string, 0, 8, allocator),
 	}
 	append(&doc.files, File{})
 	append(&doc.packages, Package{})
@@ -170,6 +171,8 @@ free_string :: proc(value: string, allocator: mem.Allocator) {
 
 Document_Destroy :: proc(doc: ^Document, allocator: mem.Allocator = context.allocator) {
 	if doc == nil do return
+	for value in doc._owned_strings do free_string(value, allocator)
+	delete(doc._owned_strings)
 	for &file in doc.files {
 		if doc._owns_data do free_string(file.name, allocator)
 	}

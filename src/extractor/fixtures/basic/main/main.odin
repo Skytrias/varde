@@ -6,8 +6,10 @@ import helper "../helper"
 Answer :: 42
 
 // A record type.
-Record :: struct {
+Record :: struct #packed {
+	// The stored record value.
 	value: int,
+	indices: [2]u32,
 }
 
 Run :: proc() {}

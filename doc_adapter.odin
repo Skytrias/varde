@@ -96,7 +96,9 @@ document_type_at :: proc(document: ^doc.Document, typ: doc.Type, index: int) -> 
 	return typ.types[index]
 }
 
-DOCUMENT_SIGNATURE_MAX_BYTES :: 512
+// Keep one hostile declaration from amplifying an artifact indefinitely, but
+// leave enough room for ordinary records with field documentation.
+DOCUMENT_SIGNATURE_MAX_BYTES :: 16 * 1024
 
 Document_Signature_Budget :: struct {
 	remaining: int,
@@ -238,7 +240,11 @@ document_append_type :: proc(builder: ^strings.Builder, budget: ^Document_Signat
 		document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
 	case 9: document_signature_write(builder, budget, "map["); document_append_type_child(builder, budget, document, typ, 0, depth, indent); document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 1, depth, indent)
 	case 10:
-		document_signature_write(builder, budget, "struct {")
+		document_signature_write(builder, budget, "struct")
+		if typ.flags & (1 << 1) != 0 do document_signature_write(builder, budget, " #packed")
+		if typ.flags & (1 << 2) != 0 do document_signature_write(builder, budget, " #raw_union")
+		if len(typ.custom_align) > 0 { document_signature_write(builder, budget, " #align "); document_signature_write(builder, budget, typ.custom_align) }
+		document_signature_write(builder, budget, " {")
 		if len(typ.entities) > 0 { document_signature_write(builder, budget, "\n"); document_append_record_entities(builder, budget, document, typ, depth + 1, indent); document_signature_indent(builder, budget, indent) }
 		document_signature_write(builder, budget, "}")
 	case 11:
@@ -380,7 +386,7 @@ test_doc_workspace_adapter_preserves_package_docs_and_source_positions :: proc(t
 	struct_entities := make([dynamic]u32, 0, 2)
 	append(&struct_entities, 3)
 	append(&struct_entities, 4)
-	append(&document.types, doc.Type{kind = 10, entities = struct_entities, types = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	append(&document.types, doc.Type{kind = 10, flags = 1 << 1, entities = struct_entities, types = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
 	documents := [1]^doc.Document{&document}
 	workspace, merge_err := doc.Merge(documents[:])
 	defer doc.Workspace_Destroy(&workspace)
@@ -395,5 +401,5 @@ test_doc_workspace_adapter_preserves_package_docs_and_source_positions :: proc(t
 	entry := adapter.model.packages[0].files[0].entries[0]
 	testing.expect(t, entry.name == "Answer" && entry.signature == "Answer :: int = 42" && entry.source_line == 7, "entries should preserve a usable signature and source position")
 	structured := adapter.model.packages[0].files[0].entries[1]
-	testing.expect(t, structured.signature == "Record :: struct {\n\tvalue:  int,\n\t// Vertical extent.\n\theight: int,\n}", "type declarations should render structured type graphs as readable code")
+	testing.expect(t, structured.signature == "Record :: struct #packed {\n\tvalue:  int,\n\t// Vertical extent.\n\theight: int,\n}", "type declarations should render structured type graphs as readable code")
 }

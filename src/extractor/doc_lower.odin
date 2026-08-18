@@ -276,13 +276,15 @@ add_annotation_type :: proc(document: ^doc.Document, annotation: string, allocat
 	return u32(len(document.types)-1), true
 }
 
-append_member :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, token: Token, annotation: string, allocator: mem.Allocator) -> bool {
+append_member :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, token: Token, annotation, docs: string, allocator: mem.Allocator) -> bool {
 	type_index, proven := add_annotation_type(document, annotation, allocator)
+	if len(docs) > 0 do append(&document._owned_strings, docs)
 	entity := doc.Entity{
 		kind = 2,
 		pos = {file = file_index, line = u32(declaration.line + token.line - 1), column = u32(token.column), offset = u32(declaration.offset + token.offset)},
 		name = token.text,
 		type = type_index,
+		docs = docs,
 		attributes = make([dynamic]doc.Attribute, 0, allocator),
 		grouped_entities = make([dynamic]u32, 0, allocator),
 		where_clauses = make([dynamic]string, 0, allocator),
@@ -292,28 +294,56 @@ append_member :: proc(document: ^doc.Document, owner_index, file_index: u32, dec
 	return proven
 }
 
-// parse_members recognizes direct `name: Type` members. It intentionally
-// leaves grouped names, defaults, directives, and polymorphic forms for the
-// semantic parser; callers receive `false` when the member syntax cannot be
-// represented by the source lowerer.
+member_annotation :: proc(tokens: []Token, start_index: int, source: string) -> string {
+	if start_index < 0 || start_index >= len(tokens) do return ""
+	start := tokens[start_index].offset
+	end := len(source)
+	nesting := 0
+	for index := start_index; index < len(tokens); index += 1 {
+		token := tokens[index]
+		if token.kind == .End { end = token.offset; break }
+		if token.text == "(" || token.text == "[" || token.text == "{" { nesting += 1; continue }
+		if token.text == ")" || token.text == "]" || token.text == "}" { if nesting > 0 { nesting -= 1; continue }; end = token.offset; break }
+		if nesting == 0 && (token.text == "," || token.text == ";" || token.kind == .Comment) { end = token.offset; break }
+	}
+	return strings.trim_space(source[start:end])
+}
+
+// parse_members recognizes direct `name: Type` members, including compound
+// annotations such as `[4]u32`. It intentionally leaves grouped names and
+// polymorphic forms for the semantic parser; callers receive `false` when the
+// member syntax cannot be represented by the source lowerer.
 parse_members :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, allocator: mem.Allocator) -> bool {
 	lexer := lexer_init(declaration.source)
 	tokens := make([dynamic]Token, 0, 16, context.temp_allocator)
 	defer delete(tokens)
 	for { token := lexer_next(&lexer); append(&tokens, token); if token.kind == .End do break }
+	pending_comments := make([dynamic]Token, 0, 2, context.temp_allocator)
+	defer delete(pending_comments)
 	open_index := -1
 	for token, index in tokens do if token.text == "{" { open_index = index; break }
 	if open_index < 0 do return true
 	depth := 0
+	previous_non_comment_line := 0
 	proven := true
 	for index := open_index; index < len(tokens); index += 1 {
 		token := tokens[index]
 		if token.text == "{" { depth += 1; continue }
-		if token.text == "}" { depth -= 1; if depth == 0 do break; continue }
-		if depth != 1 || token.kind != .Ident do continue
-		if index+2 < len(tokens) && tokens[index+1].text == ":" && tokens[index+2].kind == .Ident {
-			proven &&= append_member(document, owner_index, file_index, declaration, token, tokens[index+2].text, allocator)
+		if token.text == "}" { depth -= 1; if depth == 0 do break; if depth != 1 do clear(&pending_comments); previous_non_comment_line = token.line; continue }
+		if token.kind == .Comment {
+			// A same-line comment belongs to the preceding field. Only comments
+			// starting a fresh line are documentation for the following field.
+			if depth == 1 && token.line != previous_non_comment_line do append(&pending_comments, token)
+			continue
 		}
+		if depth != 1 { clear(&pending_comments); previous_non_comment_line = token.line; continue }
+		if index+2 < len(tokens) && tokens[index+1].text == ":" {
+			member_docs := comment_docs(pending_comments[:], allocator)
+			annotation := member_annotation(tokens[:], index+2, declaration.source)
+			proven &&= append_member(document, owner_index, file_index, declaration, token, annotation, member_docs, allocator)
+			clear(&pending_comments)
+		}
+		previous_non_comment_line = token.line
 	}
 	return proven
 }
@@ -333,7 +363,7 @@ parse_procedure :: proc(document: ^doc.Document, parameters_index, procedure_ind
 	for index := open_index+1; index+2 < close_index; index += 1 {
 		token := tokens[index]
 		if token.kind == .Ident && tokens[index+1].text == ":" && tokens[index+2].kind == .Ident {
-			proven &&= append_member(document, parameters_index, file_index, declaration, token, tokens[index+2].text, allocator)
+			proven &&= append_member(document, parameters_index, file_index, declaration, token, tokens[index+2].text, "", allocator)
 		}
 	}
 	if close_index+3 < len(tokens) && tokens[close_index+1].text == "-" && tokens[close_index+2].text == ">" && tokens[close_index+3].kind == .Ident {
@@ -373,7 +403,12 @@ add_syntactic_type :: proc(document: ^doc.Document, file_index: u32, declaration
 		if strings.contains(source, ":: enum") do kind = 12
 		if strings.contains(source, ":: bit_set") do kind = 15
 		if strings.contains(source, ":: bit_field") do kind = 25
-		append(&document.types, new_type(kind, declaration.name, allocator))
+		typ := new_type(kind, declaration.name, allocator)
+		if kind == 10 {
+			if strings.contains(source, "#packed") do typ.flags |= 1 << 1
+			if strings.contains(source, "#raw_union") do typ.flags |= 1 << 2
+		}
+		append(&document.types, typ)
 		index := u32(len(document.types)-1)
 		return index, parse_members(document, index, file_index, declaration, allocator)
 	case .Procedure:
