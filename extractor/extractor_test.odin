@@ -23,6 +23,16 @@ source_sloc_ignores_blank_and_comment_only_lines :: proc(t: ^testing.T) {
 }
 
 @(test)
+source_file_target_suffixes_follow_the_selected_platform :: proc(t: ^testing.T) {
+	testing.expect(t, !source_file_matches_target("general_js.odin", "darwin", "arm64"))
+	testing.expect(t, source_file_matches_target("general_js.odin", "js", "wasm32"))
+	testing.expect(t, source_file_matches_target("platform_linux_amd64.odin", "linux", "amd64"))
+	testing.expect(t, !source_file_matches_target("platform_linux_amd64.odin", "linux", "arm64"))
+	testing.expect(t, source_file_matches_target("linux_helpers.odin", "darwin", "arm64"))
+	testing.expect(t, source_file_matches_target("regular_helpers.odin", "darwin", "arm64"))
+}
+
+@(test)
 source_initializer_excerpt_bounds_large_constant_expressions :: proc(t: ^testing.T) {
 	value := "abcdefghijklmnopqrstuvwxyz"
 	excerpt := source_initializer_excerpt(value)
@@ -39,6 +49,37 @@ parse_source_file_keeps_adjacent_declaration_initializers_separate :: proc(t: ^t
 	testing.expect(t, len(file.declarations) == 2)
 	testing.expect(t, file.declarations[0].source == "first :: \"one\"")
 	testing.expect(t, file.declarations[1].source == "second :: u8(2)")
+}
+
+@(test)
+parse_source_file_does_not_promote_procedure_parameters_to_declarations :: proc(t: ^testing.T) {
+	source := "package sample\nRun :: proc(value := Config{}, allocator := context.allocator) {}\nAfter :: 1\n"
+	file, diagnostics := parse_source_file("params.odin", source, context.temp_allocator)
+	defer delete(diagnostics)
+	testing.expect(t, len(diagnostics) == 0)
+	testing.expect(t, len(file.declarations) == 2, "procedure parameter names must remain inside the procedure declaration")
+	testing.expect(t, file.declarations[0].name == "Run" && file.declarations[0].kind == .Procedure)
+	testing.expect(t, file.declarations[1].name == "After")
+}
+
+@(test)
+parse_source_file_recognizes_directed_procedures :: proc(t: ^testing.T) {
+	file, diagnostics := parse_source_file("directed.odin", "package sample\nFast :: #force_inline proc() {}\nGroup :: proc{Fast}\n", context.temp_allocator)
+	defer delete(diagnostics)
+	testing.expect(t, len(diagnostics) == 0)
+	testing.expect(t, len(file.declarations) == 2)
+	testing.expect(t, file.declarations[0].name == "Fast" && file.declarations[0].kind == .Procedure, "procedure directives must not turn procedures into constants")
+	testing.expect(t, file.declarations[1].name == "Group" && file.declarations[1].kind == .Procedure_Group)
+}
+
+@(test)
+parse_source_file_marks_private_constants_and_variables :: proc(t: ^testing.T) {
+	source := "package sample\n@(private)\nhidden_constant :: 1\n@(private)\nhidden_variable: int\n"
+	file, diagnostics := parse_source_file("private.odin", source, context.temp_allocator)
+	defer delete(diagnostics)
+	testing.expect(t, len(diagnostics) == 0 && len(file.declarations) == 2)
+	testing.expect(t, file.declarations[0].is_private, "private constants should retain their visibility")
+	testing.expect(t, file.declarations[1].is_private, "private variables should retain their visibility")
 }
 
 @(test)
@@ -154,7 +195,8 @@ lower_preserves_enum_cases_comments_and_values :: proc(t: ^testing.T) {
 	flags := document_entity_by_name(&result.document, "Pixel_Flags")
 	distinct_flags := document_entity_by_name(&result.document, "Distinct_Pixel_Flags")
 	bits := document_entity_by_name(&result.document, "Pixel_Bits")
-	testing.expect(t, rgba != nil && rgba.kind == 1 && rgba.init_string == "" && result.document.types[rgba.type].kind == 5, "array type constants should be structural declarations, not `_ =` initializers")
+	load := document_entity_by_name(&result.document, "Load")
+	testing.expect(t, rgba != nil && rgba.kind == 3 && rgba.init_string == "[4]u8" && result.document.types[rgba.type].kind == 5, "array declarations should follow the compiler's type-entity representation")
 	testing.expect(t, union_entity != nil && result.document.types[union_entity.type].kind == 11 && len(result.document.types[union_entity.type].types) == 3, "union variants should survive source lowering")
 	if union_entity != nil {
 		union_type := result.document.types[union_entity.type]
@@ -163,6 +205,8 @@ lower_preserves_enum_cases_comments_and_values :: proc(t: ^testing.T) {
 	testing.expect(t, flags != nil && result.document.types[flags.type].kind == 15 && len(result.document.types[flags.type].types) == 2, "bit set element and backing types should survive source lowering")
 	testing.expect(t, distinct_flags != nil && distinct_flags.init_string == "distinct bit_set[BMP_Gamut_Mapping_Intent; u32]", "distinct bit sets should keep their authored declaration")
 	testing.expect(t, bits != nil && result.document.types[bits.type].kind == 25 && len(result.document.types[bits.type].entities) == 2 && result.document.entities[result.document.types[bits.type].entities[0]].docs == "The low channel.", "bit field backing types, widths, and comments should survive source lowering")
+	testing.expect(t, load != nil && load.kind == 5 && len(load.grouped_entities) == 2 && result.document.entities[load.grouped_entities[0]].name == "Load_One", "procedure groups should retain their local procedure members")
+	testing.expect(t, document_entity_by_name(&result.document, "hidden_value") == nil && document_entity_by_name(&result.document, "hidden_variable") == nil, "private declarations should not enter public source documentation")
 }
 
 @(test)

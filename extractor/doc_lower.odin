@@ -40,6 +40,13 @@ Alias_Pending :: struct {
 	target:        string,
 }
 
+Procedure_Group_Pending :: struct {
+	package_index: u32,
+	entity_index:  u32,
+	file:          Source_File,
+	declaration:   Declaration,
+}
+
 Lower_Result_Destroy :: proc(result: ^Lower_Result, allocator: mem.Allocator = context.allocator) {
 	if result == nil do return
 	doc.Document_Destroy(&result.document, allocator)
@@ -662,6 +669,23 @@ parse_procedure :: proc(document: ^doc.Document, parameters_index, procedure_ind
 	return proven
 }
 
+procedure_group_members :: proc(declaration: Declaration) -> [dynamic]string {
+	lexer := lexer_init(declaration.source)
+	members := make([dynamic]string, 0, 4, context.temp_allocator)
+	depth := 0
+	expecting_member := false
+	for {
+		token := lexer_next(&lexer)
+		if token.kind == .End do break
+		if token.text == "{" { depth += 1; if depth == 1 do expecting_member = true; continue }
+		if token.text == "}" { depth -= 1; if depth == 0 do break; continue }
+		if depth != 1 { continue }
+		if token.text == "," { expecting_member = true; continue }
+		if expecting_member && token.kind == .Ident { append(&members, token.text); expecting_member = false }
+	}
+	return members
+}
+
 append_procedure_type :: proc(document: ^doc.Document, file_index: u32, declaration: Declaration, allocator: mem.Allocator) -> (type_index: u32, proven: bool) {
 	parameters := new_type(13, "", allocator)
 	append(&document.types, parameters)
@@ -677,11 +701,13 @@ add_syntactic_type :: proc(document: ^doc.Document, file_index: u32, declaration
 	source := declaration.source
 	#partial switch declaration.kind {
 	case .Type:
+		initializer := source_after(source, "::")
 		if strings.contains(source, ":: distinct") {
 			underlying := source_after(source, "distinct")
 			return add_annotation_type(document, underlying, allocator)
 		}
 		if strings.contains(source, ":: #type proc") do return append_procedure_type(document, file_index, declaration, allocator)
+		if !strings.has_prefix(initializer, "struct") && !strings.has_prefix(initializer, "union") && !strings.has_prefix(initializer, "enum") && !strings.has_prefix(initializer, "bit_set") && !strings.has_prefix(initializer, "bit_field") do return add_annotation_type(document, initializer, allocator)
 		kind := u32(10) // struct
 		if strings.contains(source, ":: union") do kind = 11
 		if strings.contains(source, ":: enum") do kind = 12
@@ -721,6 +747,8 @@ add_syntactic_type :: proc(document: ^doc.Document, file_index: u32, declaration
 		return index, parse_members(document, index, file_index, declaration, allocator)
 	case .Procedure:
 		return append_procedure_type(document, file_index, declaration, allocator)
+	case .Procedure_Group:
+		return 0, true
 	case .Variable:
 		annotation := source_after(source, ":")
 		if strings.has_prefix(annotation, "=") do return append_constant_type(document, source_initializer(annotation), allocator), true
@@ -767,12 +795,30 @@ resolve_direct_aliases :: proc(document: ^doc.Document, pending: []Alias_Pending
 	}
 }
 
+resolve_procedure_groups :: proc(document: ^doc.Document, pending: []Procedure_Group_Pending, result: ^Lower_Result, allocator: mem.Allocator) {
+	for item in pending {
+		if int(item.entity_index) >= len(document.entities) do continue
+		group := &document.entities[item.entity_index]
+		members := procedure_group_members(item.declaration)
+		for member in members {
+			member_index := find_package_entity(document, item.package_index, member)
+			if member_index == 0 || int(member_index) >= len(document.entities) || document.entities[member_index].kind != 4 {
+				lower_diagnostic(result, item.file, item.declaration, "procedure group member was not resolved as a local procedure; emitted as incomplete source syntax", allocator)
+				continue
+			}
+			append(&group.grouped_entities, member_index)
+		}
+		delete(members)
+	}
+}
+
 entity_kind :: proc(kind: Declaration_Kind) -> u32 {
 	#partial switch kind {
 	case .Constant: return 1
 	case .Variable: return 2
 	case .Type: return 3
 	case .Procedure: return 4
+	case .Procedure_Group: return 5
 	case: return 0
 	}
 }
@@ -845,6 +891,8 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 	if workspace == nil do return result
 	pending_aliases := make([dynamic]Alias_Pending, 0, 8, allocator)
 	defer delete(pending_aliases)
+	pending_groups := make([dynamic]Procedure_Group_Pending, 0, 8, allocator)
+	defer delete(pending_groups)
 	for source_package in workspace.packages {
 		package_index := u32(len(result.document.packages))
 		out_package := doc.Package{
@@ -858,6 +906,7 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 			append(&result.document.files, doc.File{pkg = package_index, name = file.path})
 			append(&out_package.files, file_index)
 			for declaration in file.declarations {
+				if declaration.is_private do continue
 				kind := entity_kind(declaration.kind)
 				if kind == 0 do continue
 				entity := new_entity(kind, declaration.name, declaration.docs, file_index, declaration, allocator)
@@ -886,18 +935,20 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 					if initializer := source_initializer(declaration.source); len(initializer) > 0 do entity.init_string = source_initializer_excerpt(initializer)
 				} else if declaration.kind == .Type {
 					initializer := source_after(declaration.source, "::")
-					if strings.has_prefix(initializer, "distinct") || strings.has_prefix(initializer, "#type") do entity.init_string = source_initializer_excerpt(initializer)
+					if len(initializer) > 0 do entity.init_string = source_initializer_excerpt(initializer)
 				} else if !proven {
 					lower_diagnostic(&result, file, declaration, "declaration type was not semantically resolved; emitted as incomplete source syntax", allocator, entity.type)
 				}
 				append(&result.document.entities, entity)
 				entity_index := u32(len(result.document.entities)-1)
 				append(&out_package.entries, doc.Scope_Entry{name = declaration.name, entity = entity_index})
+				if declaration.kind == .Procedure_Group do append(&pending_groups, Procedure_Group_Pending{package_index = package_index, entity_index = entity_index, file = file, declaration = declaration})
 			}
 		}
 		append(&result.document.packages, out_package)
 	}
 	resolve_direct_aliases(&result.document, pending_aliases[:], &result, allocator)
+	resolve_procedure_groups(&result.document, pending_groups[:], &result, allocator)
 	resolve_unique_named_types(&result.document)
 	discard_resolved_named_diagnostics(&result, allocator)
 	if !result.complete && options.incomplete_policy == .Reject {

@@ -48,6 +48,7 @@ Declaration_Kind :: enum {
 	Variable,
 	Type,
 	Procedure,
+	Procedure_Group,
 }
 
 Declaration :: struct {
@@ -57,6 +58,7 @@ Declaration :: struct {
 	line:       int,
 	column:     int,
 	offset:     int,
+	is_private: bool,
 	source:     string, // borrowed slice of Source_File.source
 }
 
@@ -234,14 +236,23 @@ declaration_end_offset :: proc(tokens: []Token, start_index, source_len: int) ->
 	end := source_len
 	declaration_line := tokens[start_index-2].line
 	expression_depth := 0
+	composite_depth := 0
 	for index := start_index; index < len(tokens); index += 1 {
 		token := tokens[index]
 		// A semicolon inside a type constructor (for example
 		// `bit_set[Flag; u32]`) is syntax, not a declaration boundary.
-		if token.kind == .End || (token.text == ";" && expression_depth == 0) { end = token.offset; break }
+		if token.kind == .End || (token.text == ";" && expression_depth == 0 && composite_depth == 0) { end = token.offset; break }
+		// Attributes belong to the following declaration. Treating their
+		// parentheses as part of the current declaration would swallow a
+		// following `@(private)` and lose its visibility annotation.
+		if expression_depth == 0 && composite_depth == 0 && token.text == "@" && index > start_index && index+1 < len(tokens) && tokens[index+1].text == "(" { end = token.offset; break }
 		if token.text == "(" || token.text == "[" { expression_depth += 1; continue }
 		if token.text == ")" || token.text == "]" { if expression_depth > 0 do expression_depth -= 1; continue }
 		if token.text == "{" {
+			// Composite literals in procedure parameters/default values are not a
+			// declaration body. In particular, stopping at `Alpha_Key{}` would
+			// make later procedure parameters look like package declarations.
+			if expression_depth > 0 || composite_depth > 0 { composite_depth += 1; continue }
 			depth := 1
 			for body_index := index+1; body_index < len(tokens); body_index += 1 {
 				if tokens[body_index].text == "{" do depth += 1
@@ -250,11 +261,12 @@ declaration_end_offset :: proc(tokens: []Token, start_index, source_len: int) ->
 			}
 			return source_len
 		}
+		if token.text == "}" && composite_depth > 0 { composite_depth -= 1; continue }
 		if token.kind == .Comment && token.line > declaration_line { end = token.offset; break }
 		// The lightweight lexer intentionally leaves newline insertion to this
 		// source parser. A following top-level declaration is therefore also a
 		// reliable boundary for declarations that omit an explicit semicolon.
-		if expression_depth == 0 && index > start_index && token.kind == .Ident && index+1 < len(tokens) && (tokens[index+1].text == ":" || tokens[index+1].text == "::") { end = token.offset; break }
+		if expression_depth == 0 && composite_depth == 0 && index > start_index && token.kind == .Ident && index+1 < len(tokens) && (tokens[index+1].text == ":" || tokens[index+1].text == "::") { end = token.offset; break }
 	}
 	return end
 }
@@ -308,6 +320,32 @@ file_matches_tags :: proc(source, target_os, target_arch: string) -> (include, i
 	return include, is_test
 }
 
+// Odin's source selection also recognizes trailing target components in a
+// file name, such as `general_js.odin` or `platform_linux_amd64.odin`.
+// Ordinary filename words remain neutral, even when they happen to spell a
+// target (for example, `linux_helpers.odin`).
+source_file_matches_target :: proc(name, target_os, target_arch: string) -> bool {
+	base := name
+	if strings.has_suffix(base, ".odin") do base = base[:len(base)-len(".odin")]
+	end := len(base)
+	for end > 0 {
+		start := end
+		for start > 0 && base[start-1] != '_' do start -= 1
+		component := base[start:end]
+		switch component {
+		case "darwin", "linux", "windows", "freebsd", "openbsd", "netbsd", "haiku", "wasi", "js", "essence":
+			if component != target_os do return false
+		case "amd64", "arm64", "arm32", "wasm32", "wasm64", "i386", "riscv64p32", "riscv64":
+			if component != target_arch do return false
+		case:
+			return true
+		}
+		if start == 0 do break
+		end = start - 1
+	}
+	return true
+}
+
 // declaration_token_skip returns the last token belonging to a declaration
 // whose source slice ends at end_offset. Skipping a recognized top-level
 // declaration body prevents nested procedures and local `:=` statements from
@@ -336,6 +374,7 @@ parse_source_file :: proc(path, source: string, allocator: mem.Allocator) -> (fi
 
 	package_found := false
 	depth := 0
+	pending_private := false
 	pending_comments := make([dynamic]Token, 0, 2, context.temp_allocator)
 	defer delete(pending_comments)
 	for i := 0; i < len(tokens); i += 1 {
@@ -357,6 +396,12 @@ parse_source_file :: proc(path, source: string, allocator: mem.Allocator) -> (fi
 			}
 		}
 		if !package_found do continue
+		if depth == 0 && token.text == "@" && i+2 < len(tokens) && tokens[i+1].text == "(" {
+			for attribute_index := i+2; attribute_index < len(tokens) && tokens[attribute_index].text != ")"; attribute_index += 1 {
+				if tokens[attribute_index].kind == .Ident && tokens[attribute_index].text == "private" do pending_private = true
+			}
+			continue
+		}
 		if depth != 0 { clear(&pending_comments); continue }
 		if token.kind == .Ident && token.text == "import" {
 			alias, value: Token
@@ -375,12 +420,19 @@ parse_source_file :: proc(path, source: string, allocator: mem.Allocator) -> (fi
 		if token.kind == .Ident && i+2 < len(tokens) && tokens[i+1].text == "::" {
 			kind := Declaration_Kind.Constant
 			next := tokens[i+2]
-			if next.text == "proc" do kind = .Procedure
+			procedure_index := i + 2
+			// Procedure directives such as `#force_inline` sit between `::`
+			// and `proc`, but do not change the declaration category.
+			if next.text == "#" && i+4 < len(tokens) && tokens[i+3].kind == .Ident { procedure_index = i + 4 }
+			if procedure_index < len(tokens) && tokens[procedure_index].text == "proc" do kind = .Procedure
+			if procedure_index < len(tokens) && tokens[procedure_index].text == "proc" && procedure_index+1 < len(tokens) && tokens[procedure_index+1].text == "{" do kind = .Procedure_Group
 			if next.text == "struct" || next.text == "union" || next.text == "enum" || next.text == "bit_set" || next.text == "bit_field" || next.text == "distinct" do kind = .Type
+			if next.text == "[" || next.text == "^" do kind = .Type
 			if next.text == "#" && i+4 < len(tokens) && tokens[i+3].text == "type" && tokens[i+4].text == "proc" do kind = .Type
 			end := declaration_end_offset(tokens[:], i+2, len(file.source))
-			append(&file.declarations, Declaration{name = strings.clone(token.text, allocator), kind = kind, docs = comment_docs(pending_comments[:], allocator), line = token.line, column = token.column, offset = token.offset, source = strings.trim_right_space(file.source[token.offset:end])})
+			append(&file.declarations, Declaration{name = strings.clone(token.text, allocator), kind = kind, docs = comment_docs(pending_comments[:], allocator), line = token.line, column = token.column, offset = token.offset, is_private = pending_private, source = strings.trim_right_space(file.source[token.offset:end])})
 			clear(&pending_comments)
+			pending_private = false
 			i = declaration_token_skip(tokens[:], i, end)
 			continue
 		}
@@ -388,8 +440,9 @@ parse_source_file :: proc(path, source: string, allocator: mem.Allocator) -> (fi
 		// variables. A following colon has already been handled as `::` above.
 		if token.kind == .Ident && i+1 < len(tokens) && tokens[i+1].text == ":" {
 			end := declaration_end_offset(tokens[:], i+2, len(file.source))
-			append(&file.declarations, Declaration{name = strings.clone(token.text, allocator), kind = .Variable, docs = comment_docs(pending_comments[:], allocator), line = token.line, column = token.column, offset = token.offset, source = strings.trim_right_space(file.source[token.offset:end])})
+			append(&file.declarations, Declaration{name = strings.clone(token.text, allocator), kind = .Variable, docs = comment_docs(pending_comments[:], allocator), line = token.line, column = token.column, offset = token.offset, is_private = pending_private, source = strings.trim_right_space(file.source[token.offset:end])})
 			clear(&pending_comments)
+			pending_private = false
 			i = declaration_token_skip(tokens[:], i, end)
 			continue
 		}
@@ -508,7 +561,7 @@ Extract :: proc(config: Config, allocator: mem.Allocator = context.allocator) ->
 	for info in os.walker_walk(&w) {
 		if path, err := os.walker_error(&w); err != nil { add_diagnostic(&workspace, .Discovery, path, 0, 0, "could not traverse source path", allocator); continue }
 		if info.type == .Directory && is_skipped_directory(info.name) { os.walker_skip_dir(&w); continue }
-		if info.type == .Regular && strings.has_suffix(info.name, ".odin") do append(&paths, strings.clone(info.fullpath, allocator))
+		if info.type == .Regular && strings.has_suffix(info.name, ".odin") && source_file_matches_target(info.name, target_os, target_arch) do append(&paths, strings.clone(info.fullpath, allocator))
 	}
 	slice.sort_by(paths[:], source_file_less)
 	for path in paths {

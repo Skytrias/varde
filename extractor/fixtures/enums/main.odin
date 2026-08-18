@@ -34,3 +34,13 @@ Pixel_Bits :: bit_field u8 {
 	low:  3,
 	high: 5,
 }
+
+Load_One :: proc() {}
+Load_Two :: proc() {}
+Load     :: proc{Load_One, Load_Two}
+
+@(private)
+hidden_value :: 1
+
+@(private)
+hidden_variable: int

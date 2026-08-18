@@ -380,7 +380,7 @@ document_signature :: proc(adapter: ^Document_Model, document: ^doc.Document, en
 			document_signature_write(&builder, &budget, entity.init_string)
 			break
 		}
-		if entity.kind == 3 && (strings.has_prefix(entity.init_string, "distinct ") || strings.has_prefix(entity.init_string, "#type ")) {
+		if entity.kind == 3 && len(entity.init_string) > 0 && !strings.has_prefix(entity.init_string, "struct") && !strings.has_prefix(entity.init_string, "union") && !strings.has_prefix(entity.init_string, "enum") && !strings.has_prefix(entity.init_string, "bit_set") && !strings.has_prefix(entity.init_string, "bit_field") && (entity.type == 0 || int(entity.type) >= len(document.types) || document.types[entity.type].kind != 2) {
 			document_signature_write(&builder, &budget, entity.init_string)
 			break
 		}
@@ -389,7 +389,10 @@ document_signature :: proc(adapter: ^Document_Model, document: ^doc.Document, en
 		} else {
 			document_append_type(&builder, &budget, document, entity.type, 0, 0)
 		}
-		if len(entity.init_string) > 0 {
+		// Type entities use init_string as source provenance for direct aliases
+		// (handled above) and structural declarations. Their rendered type is the
+		// declaration itself, so adding an assignment here duplicates it.
+		if entity.kind != 3 && len(entity.init_string) > 0 {
 			document_signature_write(&builder, &budget, " = ")
 			document_signature_write(&builder, &budget, entity.init_string)
 		}
@@ -397,7 +400,16 @@ document_signature :: proc(adapter: ^Document_Model, document: ^doc.Document, en
 		document_signature_write(&builder, &budget, " :: ")
 		document_append_type(&builder, &budget, document, entity.type, 0, 0)
 	case 5:
-		document_signature_write(&builder, &budget, " :: proc group")
+		document_signature_write(&builder, &budget, " :: proc{")
+		for member_index, index in entity.grouped_entities {
+			if index > 0 do document_signature_write(&builder, &budget, ", ")
+			if member_index > 0 && int(member_index) < len(document.entities) && len(document.entities[member_index].name) > 0 {
+				document_signature_write(&builder, &budget, document.entities[member_index].name)
+			} else {
+				document_signature_write(&builder, &budget, "_")
+			}
+		}
+		document_signature_write(&builder, &budget, "}")
 	}
 	return document_model_own(adapter, strings.to_string(builder), allocator)
 }
@@ -537,4 +549,22 @@ test_document_signature_renders_unions_bit_sets_and_type_constants :: proc(t: ^t
 	testing.expect(t, document_signature(&adapter, &document, union_entity, union_entity.name, context.allocator) == "Pixel_Union :: union {\n\t// A byte variant.\n\tu8,\n\t[4]u8,\n}", "union variants and comments should render structurally")
 	testing.expect(t, document_signature(&adapter, &document, flags, flags.name, context.allocator) == "Pixel_Flags :: bit_set[Pixel_Kind; u32]", "bit set element and backing types should render")
 	testing.expect(t, document_signature(&adapter, &document, distinct_flags, distinct_flags.name, context.allocator) == "Distinct_Pixel_Flags :: distinct bit_set[Pixel_Kind; u32]", "distinct bit sets should preserve their authored declaration")
+	union_entity.init_string = "union { u8 }"
+	testing.expect(t, document_signature(&adapter, &document, union_entity, union_entity.name, context.allocator) == "Pixel_Union :: union {\n\t// A byte variant.\n\tu8,\n\t[4]u8,\n}", "structural type source text must not be appended as a duplicate initializer")
+}
+
+@(test)
+test_document_signature_renders_procedure_group_members :: proc(t: ^testing.T) {
+	document := doc.Document_Init()
+	defer doc.Document_Destroy(&document)
+	append(&document.entities, doc.Entity{kind = 4, name = "Load_One", attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
+	append(&document.entities, doc.Entity{kind = 4, name = "Load_Two", attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
+	members := make([dynamic]u32, 0, 2)
+	defer delete(members)
+	append(&members, 1)
+	append(&members, 2)
+	group := doc.Entity{kind = 5, name = "Load", grouped_entities = members, attributes = make([dynamic]doc.Attribute, 0), where_clauses = make([dynamic]string, 0)}
+	adapter := Document_Model{_owned_strings = make([dynamic]string, 0)}
+	defer Document_Model_Destroy(&adapter)
+	testing.expect(t, document_signature(&adapter, &document, group, group.name, context.allocator) == "Load :: proc{Load_One, Load_Two}", "procedure groups should render their member procedures")
 }
