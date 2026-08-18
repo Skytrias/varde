@@ -48,6 +48,13 @@ Procedure_Group_Pending :: struct {
 	declaration:   Declaration,
 }
 
+Constant_Pending :: struct {
+	package_index: u32,
+	entity_index:  u32,
+	file:          Source_File,
+	declaration:   Declaration,
+}
+
 Lower_Result_Destroy :: proc(result: ^Lower_Result, allocator: mem.Allocator = context.allocator) {
 	if result == nil do return
 	doc.Document_Destroy(&result.document, allocator)
@@ -140,6 +147,118 @@ append_untyped_basic_type :: proc(document: ^doc.Document, value: string, alloca
 	return u32(len(document.types)-1)
 }
 
+append_untyped_integer_type :: proc(document: ^doc.Document, allocator: mem.Allocator) -> u32 {
+	typ := new_type(1, "untyped integer", allocator)
+	typ.flags = 1<<1 // OdinDocTypeFlag_Basic_untyped
+	append(&document.types, typ)
+	return u32(len(document.types)-1)
+}
+
+has_builtin_call :: proc(text, name: string) -> bool {
+	return len(text) > len(name) && strings.has_prefix(text, name) && text[len(name)] == '('
+}
+
+// integer_literal_expression recognizes only arithmetic composed of integer
+// literals, grouping, and integer operators. It deliberately rejects names,
+// calls, selectors, and comparisons: those require checker semantics.
+integer_literal_expression :: proc(value: string) -> bool {
+	text := strings.trim_space(value)
+	expecting_operand := true
+	paren_depth := 0
+	saw_literal := false
+	for index := 0; index < len(text); {
+		ch := text[index]
+		if is_space(ch) { index += 1; continue }
+		if ch == '/' && index+1 < len(text) && text[index+1] == '/' { break }
+		if ch == '/' && index+1 < len(text) && text[index+1] == '*' {
+			index += 2
+			for index+1 < len(text) && !(text[index] == '*' && text[index+1] == '/') do index += 1
+			if index+1 >= len(text) do return false
+			index += 2
+			continue
+		}
+		if expecting_operand {
+			if ch == '+' || ch == '-' || ch == '~' { index += 1; continue }
+			if ch == '(' { paren_depth += 1; index += 1; continue }
+			if ch < '0' || ch > '9' do return false
+			start := index
+			index += 1
+			for index < len(text) && (('0' <= text[index] && text[index] <= '9') || ('a' <= text[index] && text[index] <= 'f') || ('A' <= text[index] && text[index] <= 'F') || text[index] == 'x' || text[index] == 'X' || text[index] == 'o' || text[index] == 'O' || text[index] == 'b' || text[index] == 'B' || text[index] == '_') do index += 1
+			if _, ok := strconv.parse_int(text[start:index]); !ok do return false
+			saw_literal = true
+			expecting_operand = false
+			continue
+		}
+		if ch == ')' {
+			if paren_depth == 0 do return false
+			paren_depth -= 1
+			index += 1
+			continue
+		}
+		if ch == '<' || ch == '>' {
+			if index+1 >= len(text) || text[index+1] != ch do return false
+			index += 2
+			expecting_operand = true
+			continue
+		}
+		if ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '%' || ch == '&' || ch == '|' || ch == '^' {
+			index += 1
+			expecting_operand = true
+			continue
+		}
+		return false
+	}
+	return saw_literal && !expecting_operand && paren_depth == 0
+}
+
+// floating_literal_expression has the same deliberately narrow boundary as
+// integer_literal_expression, but admits only arithmetic over float literals.
+floating_literal_expression :: proc(value: string) -> bool {
+	text := strings.trim_space(value)
+	expecting_operand := true
+	paren_depth := 0
+	saw_float := false
+	for index := 0; index < len(text); {
+		ch := text[index]
+		if is_space(ch) { index += 1; continue }
+		if ch == '/' && index+1 < len(text) && text[index+1] == '/' { break }
+		if ch == '/' && index+1 < len(text) && text[index+1] == '*' {
+			index += 2
+			for index+1 < len(text) && !(text[index] == '*' && text[index+1] == '/') do index += 1
+			if index+1 >= len(text) do return false
+			index += 2
+			continue
+		}
+		if expecting_operand {
+			if ch == '+' || ch == '-' { index += 1; continue }
+			if ch == '(' { paren_depth += 1; index += 1; continue }
+			if ch < '0' || ch > '9' do return false
+			start := index
+			_, width, ok := strconv.parse_f64_prefix(text[index:])
+			if !ok || width == 0 do return false
+			index += width
+			literal := text[start:index]
+			if !strings.contains(literal, ".") && !strings.contains(literal, "e") && !strings.contains(literal, "E") do return false
+			saw_float = true
+			expecting_operand = false
+			continue
+		}
+		if ch == ')' {
+			if paren_depth == 0 do return false
+			paren_depth -= 1
+			index += 1
+			continue
+		}
+		if ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '%' {
+			index += 1
+			expecting_operand = true
+			continue
+		}
+		return false
+	}
+	return saw_float && !expecting_operand && paren_depth == 0
+}
+
 parse_decimal_count :: proc(value: string) -> (i64, bool) {
 	text := strings.trim_space(value)
 	if len(text) == 0 do return 0, false
@@ -161,6 +280,14 @@ append_constant_type :: proc(document: ^doc.Document, value: string, allocator: 
 	text := strings.trim_space(value)
 	if len(text) > 0 && (text[0] == '+' || text[0] == '-') do text = strings.trim_space(text[1:])
 	if basic := append_untyped_basic_type(document, text, allocator); basic != 0 do return basic
+	if has_builtin_call(text, "size_of") do return append_untyped_integer_type(document, allocator)
+	if integer_literal_expression(text) do return append_untyped_integer_type(document, allocator)
+	if floating_literal_expression(text) {
+		typ := new_type(1, "untyped float", allocator)
+		typ.flags = 1<<1 // OdinDocTypeFlag_Basic_untyped
+		append(&document.types, typ)
+		return u32(len(document.types)-1)
+	}
 	name := type_name_prefix(text)
 	if len(name) == 0 do return 0
 	remaining := strings.trim_space(text[len(name):])
@@ -766,6 +893,158 @@ find_package_entity :: proc(document: ^doc.Document, package_index: u32, name: s
 	return 0
 }
 
+type_is_untyped_integer :: proc(document: ^doc.Document, type_index: u32) -> bool {
+	return type_index > 0 && int(type_index) < len(document.types) && document.types[type_index].kind == 1 && document.types[type_index].name == "untyped integer"
+}
+
+// local_integer_constant_expression extends integer_literal_expression with
+// names whose already-lowered local declarations are untyped integers. This
+// is a type-only fixed point: it never evaluates a value or follows imports.
+local_integer_constant_expression :: proc(document: ^doc.Document, package_index: u32, value: string) -> bool {
+	text := strings.trim_space(value)
+	expecting_operand := true
+	paren_depth := 0
+	saw_operand := false
+	for index := 0; index < len(text); {
+		ch := text[index]
+		if is_space(ch) { index += 1; continue }
+		if ch == '/' && index+1 < len(text) && text[index+1] == '/' { break }
+		if ch == '/' && index+1 < len(text) && text[index+1] == '*' {
+			index += 2
+			for index+1 < len(text) && !(text[index] == '*' && text[index+1] == '/') do index += 1
+			if index+1 >= len(text) do return false
+			index += 2
+			continue
+		}
+		if expecting_operand {
+			if ch == '+' || ch == '-' || ch == '~' { index += 1; continue }
+			if ch == '(' { paren_depth += 1; index += 1; continue }
+			if '0' <= ch && ch <= '9' {
+				start := index
+				index += 1
+				for index < len(text) && (('0' <= text[index] && text[index] <= '9') || ('a' <= text[index] && text[index] <= 'f') || ('A' <= text[index] && text[index] <= 'F') || text[index] == 'x' || text[index] == 'X' || text[index] == 'o' || text[index] == 'O' || text[index] == 'b' || text[index] == 'B' || text[index] == '_') do index += 1
+				if _, ok := strconv.parse_int(text[start:index]); !ok do return false
+				saw_operand = true
+				expecting_operand = false
+				continue
+			}
+			if !is_ident_start(ch) do return false
+			if has_builtin_call(text[index:], "size_of") {
+				index += len("size_of")
+				depth := 0
+				for index < len(text) {
+					if text[index] == '(' { depth += 1 }
+					if text[index] == ')' { depth -= 1; if depth == 0 { index += 1; break } }
+					index += 1
+				}
+				if depth != 0 do return false
+				saw_operand = true
+				expecting_operand = false
+				continue
+			}
+			start := index
+			index += 1
+			for index < len(text) && is_ident_continue(text[index]) do index += 1
+			entity_index := find_package_entity(document, package_index, text[start:index])
+			if entity_index == 0 || int(entity_index) >= len(document.entities) || document.entities[entity_index].kind != 1 || !type_is_untyped_integer(document, document.entities[entity_index].type) do return false
+			saw_operand = true
+			expecting_operand = false
+			continue
+		}
+		if ch == ')' {
+			if paren_depth == 0 do return false
+			paren_depth -= 1
+			index += 1
+			continue
+		}
+		if ch == '<' || ch == '>' {
+			if index+1 >= len(text) || text[index+1] != ch do return false
+			index += 2
+			expecting_operand = true
+			continue
+		}
+		if ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '%' || ch == '&' || ch == '|' || ch == '^' {
+			index += 1
+			expecting_operand = true
+			continue
+		}
+		return false
+	}
+	return saw_operand && !expecting_operand && paren_depth == 0
+}
+
+two_call_arguments :: proc(value, name: string) -> (first, second: string, ok: bool) {
+	text := strings.trim_space(value)
+	if !strings.has_prefix(text, name) || len(text) <= len(name) || text[len(name)] != '(' do return
+	depth := 1
+	comma := -1
+	for index := len(name)+1; index < len(text); index += 1 {
+		if text[index] == '(' { depth += 1; continue }
+		if text[index] == ')' {
+			depth -= 1
+			if depth != 0 do continue
+			if comma < 0 || len(strings.trim_space(text[index+1:])) > 0 do return
+			return strings.trim_space(text[len(name)+1:comma]), strings.trim_space(text[comma+1:index]), true
+		}
+		if text[index] == ',' && depth == 1 {
+			if comma >= 0 do return
+			comma = index
+		}
+	}
+	return
+}
+
+// configuration_integer_expression accepts only #config fallback values and
+// min/max calls whose operands independently establish untyped integer type.
+// It intentionally does not read configuration state or evaluate values.
+configuration_integer_expression :: proc(document: ^doc.Document, package_index: u32, value: string) -> bool {
+	if local_integer_constant_expression(document, package_index, value) do return true
+	first, second, ok := two_call_arguments(value, "#config")
+	if ok {
+		_ = first
+		return configuration_integer_expression(document, package_index, second)
+	}
+	first, second, ok = two_call_arguments(value, "min")
+	if ok do return configuration_integer_expression(document, package_index, first) && configuration_integer_expression(document, package_index, second)
+	first, second, ok = two_call_arguments(value, "max")
+	if ok do return configuration_integer_expression(document, package_index, first) && configuration_integer_expression(document, package_index, second)
+	return false
+}
+
+// local_same_type_sum_expression handles a value-level `A + B + C` only when
+// every operand is a known local constant with the same named type. This is
+// enough for bit-set composition while avoiding a general operator resolver.
+local_same_type_sum_expression :: proc(document: ^doc.Document, package_index: u32, value: string) -> u32 {
+	text := strings.trim_space(value)
+	expected_type := u32(0)
+	expecting_operand := true
+	for index := 0; index < len(text); {
+		if is_space(text[index]) { index += 1; continue }
+		if expecting_operand {
+			if !is_ident_start(text[index]) do return 0
+			start := index
+			index += 1
+			for index < len(text) && is_ident_continue(text[index]) do index += 1
+			entity_index := find_package_entity(document, package_index, text[start:index])
+			if entity_index == 0 || int(entity_index) >= len(document.entities) do return 0
+			typ := document.entities[entity_index].type
+			if typ == 0 || int(typ) >= len(document.types) || document.types[typ].kind != 2 || len(document.types[typ].name) == 0 do return 0
+			if expected_type == 0 {
+				expected_type = typ
+			} else if document.types[expected_type].name != document.types[typ].name {
+				return 0
+			}
+			expecting_operand = false
+			continue
+		}
+		if text[index] != '+' do return 0
+		index += 1
+		expecting_operand = true
+	}
+	if expecting_operand do return 0
+	return expected_type
+}
+
 // An imported alias is semantically established only when its qualifier maps
 // to a discovered package. Qualified names from dependencies outside the
 // selected source root deliberately remain unresolved.
@@ -813,6 +1092,36 @@ resolve_direct_aliases :: proc(document: ^doc.Document, pending: []Alias_Pending
 	for item, index in pending {
 		if !resolved[index] do lower_diagnostic(result, item.file, item.declaration, "alias target was not resolved from the local package; emitted as incomplete source syntax", allocator)
 	}
+}
+
+resolve_local_constant_expressions :: proc(document: ^doc.Document, pending: []Constant_Pending, result: ^Lower_Result, allocator: mem.Allocator) {
+	if document == nil do return
+	resolved := make([]bool, len(pending), context.temp_allocator)
+	for pass := 0; pass < len(pending); pass += 1 {
+		progress := false
+		for item, index in pending {
+			if resolved[index] do continue
+			if int(item.entity_index) >= len(document.entities) { resolved[index] = true; continue }
+			entity := &document.entities[item.entity_index]
+			if entity.type != 0 { resolved[index] = true; progress = true; continue }
+			initializer := source_after(item.declaration.source, "::")
+			if local_integer_constant_expression(document, item.package_index, initializer) {
+				entity.type = append_untyped_integer_type(document, allocator)
+				resolved[index] = true
+				progress = true
+			} else if configuration_integer_expression(document, item.package_index, initializer) {
+				entity.type = append_untyped_integer_type(document, allocator)
+				resolved[index] = true
+				progress = true
+			} else if typ := local_same_type_sum_expression(document, item.package_index, initializer); typ != 0 {
+				entity.type = typ
+				resolved[index] = true
+				progress = true
+			}
+		}
+		if !progress do break
+	}
+	for item, index in pending do if !resolved[index] do lower_diagnostic(result, item.file, item.declaration, "constant type was not resolved; emitted as incomplete source syntax", allocator)
 }
 
 resolve_procedure_groups :: proc(document: ^doc.Document, pending: []Procedure_Group_Pending, result: ^Lower_Result, allocator: mem.Allocator) {
@@ -913,6 +1222,8 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 	defer delete(pending_aliases)
 	pending_groups := make([dynamic]Procedure_Group_Pending, 0, 8, allocator)
 	defer delete(pending_groups)
+	pending_constants := make([dynamic]Constant_Pending, 0, 16, allocator)
+	defer delete(pending_constants)
 	for source_package in workspace.packages {
 		package_index := u32(len(result.document.packages))
 		out_package := doc.Package{
@@ -962,7 +1273,6 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 						entity.type = append_constant_type(&result.document, initializer, allocator)
 						entity.init_string = source_initializer_excerpt(initializer)
 					}
-					if entity.type == 0 do lower_diagnostic(&result, file, declaration, "constant type was not resolved; emitted as incomplete source syntax", allocator)
 				} else if declaration.kind == .Variable {
 					if initializer := source_initializer(declaration.source); len(initializer) > 0 do entity.init_string = source_initializer_excerpt(initializer)
 				} else if declaration.kind == .Type {
@@ -974,12 +1284,14 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 				append(&result.document.entities, entity)
 				entity_index := u32(len(result.document.entities)-1)
 				append(&out_package.entries, doc.Scope_Entry{name = declaration.name, entity = entity_index})
+				if declaration.kind == .Constant && entity.type == 0 do append(&pending_constants, Constant_Pending{package_index = package_index, entity_index = entity_index, file = file, declaration = declaration})
 				if declaration.kind == .Procedure_Group do append(&pending_groups, Procedure_Group_Pending{package_index = package_index, entity_index = entity_index, file = file, declaration = declaration})
 			}
 		}
 		append(&result.document.packages, out_package)
 	}
 	resolve_direct_aliases(&result.document, pending_aliases[:], &result, allocator)
+	resolve_local_constant_expressions(&result.document, pending_constants[:], &result, allocator)
 	resolve_procedure_groups(&result.document, pending_groups[:], &result, allocator)
 	resolve_unique_named_types(&result.document)
 	discard_resolved_named_diagnostics(&result, allocator)

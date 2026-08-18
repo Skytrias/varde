@@ -246,6 +246,9 @@ declaration_end_offset :: proc(tokens: []Token, start_index, source_len: int) ->
 		// parentheses as part of the current declaration would swallow a
 		// following `@(private)` and lose its visibility annotation.
 		if expression_depth == 0 && composite_depth == 0 && token.text == "@" && index > start_index && index+1 < len(tokens) && tokens[index+1].text == "(" { end = token.offset; break }
+		// Compiler directives such as `#assert` begin a new top-level item;
+		// they are not part of the preceding constant initializer.
+		if expression_depth == 0 && composite_depth == 0 && token.line > declaration_line && token.text == "#" && index > start_index && index+1 < len(tokens) && tokens[index+1].kind == .Ident { end = token.offset; break }
 		if token.text == "(" || token.text == "[" { expression_depth += 1; continue }
 		if token.text == ")" || token.text == "]" { if expression_depth > 0 do expression_depth -= 1; continue }
 		if token.text == "{" {
