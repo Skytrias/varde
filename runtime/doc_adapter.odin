@@ -105,6 +105,11 @@ Document_Signature_Budget :: struct {
 	truncated: bool,
 }
 
+// Source lowering uses this display-only marker for `Name :: Type_Expression`
+// constants. It preserves aliases and structural type definitions without
+// fabricating a value initializer.
+SOURCE_ENTITY_FLAG_TYPE_EXPRESSION :: u64(1 << 21)
+
 // Signatures are display summaries, not a transport for arbitrarily large
 // initializers or anonymous type graphs. Bound them while constructing the
 // renderer model so the HTML page and search index cannot amplify one input.
@@ -233,6 +238,45 @@ document_append_enum_entities :: proc(builder: ^strings.Builder, budget: ^Docume
 	}
 }
 
+document_append_union_entities :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, typ: doc.Type, depth, indent: int) {
+	for entity_index in typ.entities {
+		if budget.truncated do break
+		if entity_index == 0 || int(entity_index) >= len(document.entities) do continue
+		entity := document.entities[entity_index]
+		document_signature_write_docs(builder, budget, entity.docs, indent + 1)
+		document_signature_indent(builder, budget, indent + 1)
+		document_append_type(builder, budget, document, entity.type, depth + 1, indent + 1)
+		document_signature_write(builder, budget, ",")
+		if comment := strings.trim_space(entity.comment); len(comment) > 0 {
+			if strings.has_prefix(comment, "//") { document_signature_write(builder, budget, " ") } else { document_signature_write(builder, budget, " // ") }
+			document_signature_write(builder, budget, comment)
+		}
+		document_signature_write(builder, budget, "\n")
+	}
+}
+
+document_append_bit_field_entities :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, typ: doc.Type, indent: int) {
+	name_width := document_entity_name_width(document, typ.entities[:])
+	for entity_index in typ.entities {
+		if budget.truncated do break
+		if entity_index == 0 || int(entity_index) >= len(document.entities) do continue
+		entity := document.entities[entity_index]
+		document_signature_write_docs(builder, budget, entity.docs, indent + 1)
+		document_signature_indent(builder, budget, indent + 1)
+		name := entity.name
+		if len(name) > 0 { document_signature_write(builder, budget, name) } else { name = "_"; document_signature_write(builder, budget, name) }
+		document_signature_write(builder, budget, ": ")
+		for _ in 0..<max(name_width-len(name), 0) do document_signature_write(builder, budget, " ")
+		if len(entity.init_string) > 0 { document_signature_write(builder, budget, entity.init_string) } else { document_signature_write(builder, budget, "_") }
+		document_signature_write(builder, budget, ",")
+		if comment := strings.trim_space(entity.comment); len(comment) > 0 {
+			if strings.has_prefix(comment, "//") { document_signature_write(builder, budget, " ") } else { document_signature_write(builder, budget, " // ") }
+			document_signature_write(builder, budget, comment)
+		}
+		document_signature_write(builder, budget, "\n")
+	}
+}
+
 document_append_type_child :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, typ: doc.Type, index, depth, indent: int) {
 	document_append_type(builder, budget, document, document_type_at(document, typ, index), depth + 1, indent)
 }
@@ -275,7 +319,7 @@ document_append_type :: proc(builder: ^strings.Builder, budget: ^Document_Signat
 		document_signature_write(builder, budget, "union {")
 		if len(typ.types) > 0 {
 			document_signature_write(builder, budget, "\n")
-			for child_index in typ.types { if budget.truncated do break; document_signature_indent(builder, budget, indent + 1); document_append_type(builder, budget, document, child_index, depth + 1, indent + 1); document_signature_write(builder, budget, ",\n") }
+			if len(typ.entities) == len(typ.types) { document_append_union_entities(builder, budget, document, typ, depth, indent) } else { for child_index in typ.types { if budget.truncated do break; document_signature_indent(builder, budget, indent + 1); document_append_type(builder, budget, document, child_index, depth + 1, indent + 1); document_signature_write(builder, budget, ",\n") } }
 			document_signature_indent(builder, budget, indent)
 		}
 		document_signature_write(builder, budget, "}")
@@ -309,13 +353,17 @@ document_append_type :: proc(builder: ^strings.Builder, budget: ^Document_Signat
 		if len(typ.types) > 1 && document_type_at(document, typ, 1) != 0 { document_signature_write(builder, budget, " -> "); document_append_type_child(builder, budget, document, typ, 1, depth, indent) }
 	case 15:
 		document_signature_write(builder, budget, "bit_set["); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
-		if typ.elem_count_len > 0 { document_signature_write(builder, budget, "; "); document_signature_write_int(builder, budget, int(typ.elem_counts[0])); if typ.elem_count_len > 1 { document_signature_write(builder, budget, ".."); document_signature_write_int(builder, budget, int(typ.elem_counts[1])) } }
+		if len(typ.types) > 1 { document_signature_write(builder, budget, "; "); document_append_type_child(builder, budget, document, typ, 1, depth, indent) } else if typ.elem_count_len > 0 { document_signature_write(builder, budget, "; "); document_signature_write_int(builder, budget, int(typ.elem_counts[0])); if typ.elem_count_len > 1 { document_signature_write(builder, budget, ".."); document_signature_write_int(builder, budget, int(typ.elem_counts[1])) } }
 		document_signature_write(builder, budget, "]")
 	case 16: document_signature_write(builder, budget, "#simd["); document_signature_write_int(builder, budget, int(typ.elem_counts[0])); document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
 	case 17, 18, 19: document_signature_write(builder, budget, "#soa"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
 	case 20, 21: document_signature_write(builder, budget, "#relative"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
 	case 23: document_signature_write(builder, budget, "matrix["); document_signature_write_int(builder, budget, int(typ.elem_counts[0])); document_signature_write(builder, budget, ", "); document_signature_write_int(builder, budget, int(typ.elem_counts[1])); document_signature_write(builder, budget, "]"); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
-	case 25: document_signature_write(builder, budget, "bit_field "); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+	case 25:
+		document_signature_write(builder, budget, "bit_field "); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
+		document_signature_write(builder, budget, " {")
+		if len(typ.entities) > 0 { document_signature_write(builder, budget, "\n"); document_append_bit_field_entities(builder, budget, document, typ, indent); document_signature_indent(builder, budget, indent) }
+		document_signature_write(builder, budget, "}")
 	case: document_signature_write(builder, budget, "_")
 	}
 }
@@ -328,6 +376,14 @@ document_signature :: proc(adapter: ^Document_Model, document: ^doc.Document, en
 	switch entity.kind {
 	case 1, 2, 3:
 		document_signature_write(&builder, &budget, " :: ")
+		if entity.flags & SOURCE_ENTITY_FLAG_TYPE_EXPRESSION != 0 {
+			document_signature_write(&builder, &budget, entity.init_string)
+			break
+		}
+		if entity.kind == 3 && (strings.has_prefix(entity.init_string, "distinct ") || strings.has_prefix(entity.init_string, "#type ")) {
+			document_signature_write(&builder, &budget, entity.init_string)
+			break
+		}
 		if entity.kind == 3 && entity.type != 0 && int(entity.type) < len(document.types) && document.types[entity.type].kind == 2 && len(document.types[entity.type].types) > 0 {
 			document_append_type(&builder, &budget, document, document.types[entity.type].types[0], 0, 0)
 		} else {
@@ -446,4 +502,39 @@ test_document_signature_renders_documented_enum_cases :: proc(t: ^testing.T) {
 	budget := Document_Signature_Budget{remaining = DOCUMENT_SIGNATURE_MAX_BYTES}
 	document_append_type(&builder, &budget, &document, 2, 0, 0)
 	testing.expect(t, strings.to_string(builder) == "enum u8 {\n\t// No state has been selected.\n\tUnknown = 0, // The implicit default.\n\t// The system is ready.\n\tReady   = 5,\n}", "enum cases should render with aligned values, inline comments, and documentation")
+}
+
+@(test)
+test_document_signature_renders_unions_bit_sets_and_type_constants :: proc(t: ^testing.T) {
+	document := doc.Document_Init()
+	defer doc.Document_Destroy(&document)
+	append(&document.types, doc.Type{kind = 1, name = "u8", types = make([dynamic]u32, 0), entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	append(&document.types, doc.Type{kind = 1, name = "u32", types = make([dynamic]u32, 0), entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	array_elements := make([dynamic]u32, 0, 1)
+	append(&array_elements, 1)
+	append(&document.types, doc.Type{kind = 5, elem_count_len = 1, elem_counts = {4, 0, 0, 0}, types = array_elements, entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	append(&document.types, doc.Type{kind = 2, name = "Pixel_Kind", types = make([dynamic]u32, 0), entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	union_variants := make([dynamic]u32, 0, 2)
+	append(&union_variants, 1)
+	append(&union_variants, 3)
+	union_fields := make([dynamic]u32, 0, 2)
+	append(&document.entities, doc.Entity{kind = 2, type = 1, docs = "A byte variant.", attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
+	append(&union_fields, 1)
+	append(&document.entities, doc.Entity{kind = 2, type = 3, attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
+	append(&union_fields, 2)
+	append(&document.types, doc.Type{kind = 11, types = union_variants, entities = union_fields, where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	bit_set_types := make([dynamic]u32, 0, 2)
+	append(&bit_set_types, 4)
+	append(&bit_set_types, 2)
+	append(&document.types, doc.Type{kind = 15, types = bit_set_types, entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	constant := doc.Entity{kind = 1, name = "RGBA_Pixel", type = 3, attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)}
+	union_entity := doc.Entity{kind = 3, name = "Pixel_Union", type = 5, attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)}
+	flags := doc.Entity{kind = 3, name = "Pixel_Flags", type = 6, attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)}
+	distinct_flags := doc.Entity{kind = 3, name = "Distinct_Pixel_Flags", type = 6, init_string = "distinct bit_set[Pixel_Kind; u32]", attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)}
+	adapter := Document_Model{_owned_strings = make([dynamic]string, 0)}
+	defer Document_Model_Destroy(&adapter)
+	testing.expect(t, document_signature(&adapter, &document, constant, constant.name, context.allocator) == "RGBA_Pixel :: [4]u8", "type constants should render without a fabricated value initializer")
+	testing.expect(t, document_signature(&adapter, &document, union_entity, union_entity.name, context.allocator) == "Pixel_Union :: union {\n\t// A byte variant.\n\tu8,\n\t[4]u8,\n}", "union variants and comments should render structurally")
+	testing.expect(t, document_signature(&adapter, &document, flags, flags.name, context.allocator) == "Pixel_Flags :: bit_set[Pixel_Kind; u32]", "bit set element and backing types should render")
+	testing.expect(t, document_signature(&adapter, &document, distinct_flags, distinct_flags.name, context.allocator) == "Distinct_Pixel_Flags :: distinct bit_set[Pixel_Kind; u32]", "distinct bit sets should preserve their authored declaration")
 }

@@ -217,8 +217,34 @@ source_initializer_excerpt :: proc(value: string) -> string {
 	return value[:SOURCE_INITIALIZER_DISPLAY_MAX_BYTES]
 }
 
+add_bit_set_type :: proc(document: ^doc.Document, text: string, allocator: mem.Allocator) -> (type_index: u32, proven: bool) {
+	if !strings.has_prefix(text, "bit_set[") do return 0, false
+	close := strings.index(text, "]")
+	if close <= len("bit_set[") do return 0, false
+	body := strings.trim_space(text[len("bit_set["):close])
+	element_text, backing_text := body, ""
+	if separator := strings.index(body, ";"); separator >= 0 {
+		element_text = strings.trim_space(body[:separator])
+		backing_text = strings.trim_space(body[separator+1:])
+	}
+	element, element_proven := add_annotation_type(document, element_text, allocator)
+	if element == 0 do return 0, false
+	set_type := new_type(15, "", allocator)
+	append(&set_type.types, element)
+	proven = element_proven
+	if len(backing_text) > 0 {
+		backing, backing_proven := add_annotation_type(document, backing_text, allocator)
+		if backing == 0 do return 0, false
+		append(&set_type.types, backing)
+		proven &&= backing_proven
+	}
+	append(&document.types, set_type)
+	return u32(len(document.types)-1), proven
+}
+
 add_annotation_type :: proc(document: ^doc.Document, annotation: string, allocator: mem.Allocator) -> (type_index: u32, proven: bool) {
 	text := strings.trim_space(annotation)
+	if strings.has_prefix(text, "bit_set[") do return add_bit_set_type(document, text, allocator)
 	if strings.has_prefix(text, "^") {
 		element, element_proven := add_annotation_type(document, text[1:], allocator)
 		if element == 0 do return 0, false
@@ -308,6 +334,41 @@ append_enum_member :: proc(document: ^doc.Document, owner_index, file_index: u32
 		pos = {file = file_index, line = u32(declaration.line + token.line - 1), column = u32(token.column), offset = u32(declaration.offset + token.offset)},
 		name = token.text,
 		init_string = initializer,
+		comment = comment,
+		docs = docs,
+		attributes = make([dynamic]doc.Attribute, 0, allocator),
+		grouped_entities = make([dynamic]u32, 0, allocator),
+		where_clauses = make([dynamic]string, 0, allocator),
+	}
+	append(&document.entities, entity)
+	append(&document.types[owner_index].entities, u32(len(document.entities)-1))
+}
+
+append_union_variant :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, token: Token, type_index: u32, comment, docs: string, allocator: mem.Allocator) {
+	if len(docs) > 0 do append(&document._owned_strings, docs)
+	if len(comment) > 0 do append(&document._owned_strings, comment)
+	entity := doc.Entity{
+		kind = 2,
+		pos = {file = file_index, line = u32(declaration.line + token.line - 1), column = u32(token.column), offset = u32(declaration.offset + token.offset)},
+		type = type_index,
+		comment = comment,
+		docs = docs,
+		attributes = make([dynamic]doc.Attribute, 0, allocator),
+		grouped_entities = make([dynamic]u32, 0, allocator),
+		where_clauses = make([dynamic]string, 0, allocator),
+	}
+	append(&document.entities, entity)
+	append(&document.types[owner_index].entities, u32(len(document.entities)-1))
+}
+
+append_bit_field_member :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, token: Token, width, comment, docs: string, allocator: mem.Allocator) {
+	if len(docs) > 0 do append(&document._owned_strings, docs)
+	if len(comment) > 0 do append(&document._owned_strings, comment)
+	entity := doc.Entity{
+		kind = 2,
+		pos = {file = file_index, line = u32(declaration.line + token.line - 1), column = u32(token.column), offset = u32(declaration.offset + token.offset)},
+		name = token.text,
+		init_string = width,
 		comment = comment,
 		docs = docs,
 		attributes = make([dynamic]doc.Attribute, 0, allocator),
@@ -429,6 +490,78 @@ parse_members :: proc(document: ^doc.Document, owner_index, file_index: u32, dec
 	return proven
 }
 
+// Unions carry a list of variant types rather than record fields. Parse each
+// direct comma-separated body item so source-generated documents retain the
+// same shape as compiler-produced union data.
+parse_union_members :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, allocator: mem.Allocator) -> bool {
+	lexer := lexer_init(declaration.source)
+	tokens := make([dynamic]Token, 0, 16, context.temp_allocator)
+	defer delete(tokens)
+	for { token := lexer_next(&lexer); append(&tokens, token); if token.kind == .End do break }
+	open_index := -1
+	for token, index in tokens do if token.text == "{" { open_index = index; break }
+	if open_index < 0 do return true
+	depth := 0
+	expecting_variant := false
+	proven := true
+	pending_comments := make([dynamic]Token, 0, 2, context.temp_allocator)
+	defer delete(pending_comments)
+	previous_non_comment_line := 0
+	for index := open_index; index < len(tokens); index += 1 {
+		token := tokens[index]
+		if token.text == "{" { depth += 1; if depth == 1 do expecting_variant = true; continue }
+		if token.text == "}" { depth -= 1; if depth == 0 do break; previous_non_comment_line = token.line; continue }
+		if token.kind == .Comment {
+			if depth == 1 && expecting_variant && token.line != previous_non_comment_line do append(&pending_comments, token)
+			continue
+		}
+		if depth != 1 { clear(&pending_comments); previous_non_comment_line = token.line; continue }
+		if token.text == "," || token.text == ";" { expecting_variant = true; previous_non_comment_line = token.line; continue }
+		if !expecting_variant do continue
+		annotation := member_annotation(tokens[:], index, declaration.source)
+		variant, variant_proven := add_annotation_type(document, annotation, allocator)
+		if variant == 0 { proven = false } else {
+			append(&document.types[owner_index].types, variant)
+			append_union_variant(document, owner_index, file_index, declaration, token, variant, enum_member_comment(tokens[:], index, allocator), comment_docs(pending_comments[:], allocator), allocator)
+			proven &&= variant_proven
+		}
+		clear(&pending_comments)
+		expecting_variant = false
+		previous_non_comment_line = token.line
+	}
+	return proven
+}
+
+parse_bit_field_members :: proc(document: ^doc.Document, owner_index, file_index: u32, declaration: Declaration, allocator: mem.Allocator) -> bool {
+	lexer := lexer_init(declaration.source)
+	tokens := make([dynamic]Token, 0, 16, context.temp_allocator)
+	defer delete(tokens)
+	for { token := lexer_next(&lexer); append(&tokens, token); if token.kind == .End do break }
+	pending_comments := make([dynamic]Token, 0, 2, context.temp_allocator)
+	defer delete(pending_comments)
+	open_index := -1
+	for token, index in tokens do if token.text == "{" { open_index = index; break }
+	if open_index < 0 do return true
+	depth := 0
+	previous_non_comment_line := 0
+	for index := open_index; index < len(tokens); index += 1 {
+		token := tokens[index]
+		if token.text == "{" { depth += 1; continue }
+		if token.text == "}" { depth -= 1; if depth == 0 do break; previous_non_comment_line = token.line; continue }
+		if token.kind == .Comment {
+			if depth == 1 && token.line != previous_non_comment_line do append(&pending_comments, token)
+			continue
+		}
+		if depth != 1 { clear(&pending_comments); previous_non_comment_line = token.line; continue }
+		if index+2 < len(tokens) && tokens[index+1].text == ":" {
+			append_bit_field_member(document, owner_index, file_index, declaration, token, member_annotation(tokens[:], index+2, declaration.source), enum_member_comment(tokens[:], index, allocator), comment_docs(pending_comments[:], allocator), allocator)
+			clear(&pending_comments)
+		}
+		previous_non_comment_line = token.line
+	}
+	return true
+}
+
 // parse_enum_members recognizes one direct enum case per comma-separated
 // item. Case values deliberately remain authored source text: evaluating an
 // arbitrary constant expression would require compiler semantics, while the
@@ -489,6 +622,12 @@ parse_enum_members :: proc(document: ^doc.Document, owner_index, file_index: u32
 
 enum_underlying_annotation :: proc(source: string) -> string {
 	underlying := source_after(source, ":: enum")
+	if open := strings.index(underlying, "{"); open >= 0 do underlying = underlying[:open]
+	return strings.trim_space(underlying)
+}
+
+bit_field_underlying_annotation :: proc(source: string) -> string {
+	underlying := source_after(source, ":: bit_field")
 	if open := strings.index(underlying, "{"); open >= 0 do underlying = underlying[:open]
 	return strings.trim_space(underlying)
 }
@@ -564,6 +703,21 @@ add_syntactic_type :: proc(document: ^doc.Document, file_index: u32, declaration
 			}
 			return index, parse_enum_members(document, index, file_index, declaration, allocator) && proven
 		}
+		if kind == 11 do return index, parse_union_members(document, index, file_index, declaration, allocator)
+		if kind == 15 {
+			// A bit set has an element and optional backing integer type; do not
+			// leave it as an empty structural shell.
+			return add_bit_set_type(document, source_after(source, "::"), allocator)
+		}
+		if kind == 25 {
+			proven := true
+			if underlying := bit_field_underlying_annotation(source); len(underlying) > 0 {
+				underlying_index, underlying_proven := add_annotation_type(document, underlying, allocator)
+				append(&document.types[index].types, underlying_index)
+				proven = underlying_proven
+			}
+			return index, parse_bit_field_members(document, index, file_index, declaration, allocator) && proven
+		}
 		return index, parse_members(document, index, file_index, declaration, allocator)
 	case .Procedure:
 		return append_procedure_type(document, file_index, declaration, allocator)
@@ -621,6 +775,16 @@ entity_kind :: proc(kind: Declaration_Kind) -> u32 {
 	case .Procedure: return 4
 	case: return 0
 	}
+}
+
+// Marks an alias-like constant whose initializer is an authored type
+// expression. The renderer writes `Name :: Type` directly rather than
+// inventing a value initializer such as `_ = Type`.
+SOURCE_ENTITY_FLAG_TYPE_EXPRESSION :: u64(1 << 21)
+
+constant_initializer_is_structural_type :: proc(initializer: string) -> bool {
+	text := strings.trim_space(initializer)
+	return strings.has_prefix(text, "^") || strings.has_prefix(text, "[") || strings.has_prefix(text, "map[") || strings.has_prefix(text, "proc") || strings.has_prefix(text, "bit_set[") || strings.has_prefix(text, "bit_field ") || strings.has_prefix(text, "struct ") || strings.has_prefix(text, "union ") || strings.has_prefix(text, "enum ")
 }
 
 // resolve_unique_named_types adds the doc-format definition edge only when a
@@ -702,14 +866,21 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 				if declaration.kind == .Constant {
 					initializer := source_after(declaration.source, "::")
 					if target := direct_alias_target(initializer); len(target) > 0 {
+						entity.flags |= SOURCE_ENTITY_FLAG_TYPE_EXPRESSION
+						entity.init_string = target
+						entity.type, _ = add_annotation_type(&result.document, target, allocator)
 						append(&result.document.entities, entity)
 						entity_index := u32(len(result.document.entities)-1)
 						append(&out_package.entries, doc.Scope_Entry{name = declaration.name, entity = entity_index})
 						append(&pending_aliases, Alias_Pending{package_index = package_index, entity_index = entity_index, file = file, declaration = declaration, target = target})
 						continue
 					}
-					entity.type = append_constant_type(&result.document, initializer, allocator)
-					entity.init_string = source_initializer_excerpt(initializer)
+					if constant_initializer_is_structural_type(initializer) {
+						entity.type, proven = add_annotation_type(&result.document, initializer, allocator)
+					} else {
+						entity.type = append_constant_type(&result.document, initializer, allocator)
+						entity.init_string = source_initializer_excerpt(initializer)
+					}
 					if entity.type == 0 do lower_diagnostic(&result, file, declaration, "constant type was not resolved; emitted as incomplete source syntax", allocator)
 				} else if declaration.kind == .Variable {
 					if initializer := source_initializer(declaration.source); len(initializer) > 0 do entity.init_string = source_initializer_excerpt(initializer)

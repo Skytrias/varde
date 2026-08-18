@@ -236,7 +236,9 @@ declaration_end_offset :: proc(tokens: []Token, start_index, source_len: int) ->
 	expression_depth := 0
 	for index := start_index; index < len(tokens); index += 1 {
 		token := tokens[index]
-		if token.kind == .End || token.text == ";" { end = token.offset; break }
+		// A semicolon inside a type constructor (for example
+		// `bit_set[Flag; u32]`) is syntax, not a declaration boundary.
+		if token.kind == .End || (token.text == ";" && expression_depth == 0) { end = token.offset; break }
 		if token.text == "(" || token.text == "[" { expression_depth += 1; continue }
 		if token.text == ")" || token.text == "]" { if expression_depth > 0 do expression_depth -= 1; continue }
 		if token.text == "{" {

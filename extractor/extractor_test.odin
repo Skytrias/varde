@@ -149,6 +149,20 @@ lower_preserves_enum_cases_comments_and_values :: proc(t: ^testing.T) {
 	abs_colorimetric := result.document.entities[gamut_fields[1]]
 	testing.expect(t, invalid.name == "INVALID" && invalid.init_string == "0" && invalid.comment == "If not V5, this field will just be zero-initialized and not valid.", "inline enum field comments should survive source lowering")
 	testing.expect(t, abs_colorimetric.name == "ABS_COLORIMETRIC" && abs_colorimetric.init_string == "8", "hexadecimal enum values should render as the documented decimal value")
+	rgba := document_entity_by_name(&result.document, "RGBA_Pixel")
+	union_entity := document_entity_by_name(&result.document, "Pixel_Union")
+	flags := document_entity_by_name(&result.document, "Pixel_Flags")
+	distinct_flags := document_entity_by_name(&result.document, "Distinct_Pixel_Flags")
+	bits := document_entity_by_name(&result.document, "Pixel_Bits")
+	testing.expect(t, rgba != nil && rgba.kind == 1 && rgba.init_string == "" && result.document.types[rgba.type].kind == 5, "array type constants should be structural declarations, not `_ =` initializers")
+	testing.expect(t, union_entity != nil && result.document.types[union_entity.type].kind == 11 && len(result.document.types[union_entity.type].types) == 3, "union variants should survive source lowering")
+	if union_entity != nil {
+		union_type := result.document.types[union_entity.type]
+		testing.expect(t, len(union_type.entities) == 3 && result.document.entities[union_type.entities[0]].docs == "A one-channel pixel.", "union variant comments should survive source lowering")
+	}
+	testing.expect(t, flags != nil && result.document.types[flags.type].kind == 15 && len(result.document.types[flags.type].types) == 2, "bit set element and backing types should survive source lowering")
+	testing.expect(t, distinct_flags != nil && distinct_flags.init_string == "distinct bit_set[BMP_Gamut_Mapping_Intent; u32]", "distinct bit sets should keep their authored declaration")
+	testing.expect(t, bits != nil && result.document.types[bits.type].kind == 25 && len(result.document.types[bits.type].entities) == 2 && result.document.entities[result.document.types[bits.type].entities[0]].docs == "The low channel.", "bit field backing types, widths, and comments should survive source lowering")
 }
 
 @(test)
