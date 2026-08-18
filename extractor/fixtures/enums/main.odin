@@ -18,6 +18,7 @@ BMP_Gamut_Mapping_Intent :: enum u32le {
 
 RGB_Pixel  :: [3]u8
 RGBA_Pixel :: [4]u8
+Little_Endian_Count :: u32le
 
 Pixel_Union :: union {
 	// A one-channel pixel.

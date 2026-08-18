@@ -34,6 +34,7 @@ Lower_Result :: struct {
 
 Alias_Pending :: struct {
 	package_index: u32,
+	target_package: i32,
 	entity_index:  u32,
 	file:          Source_File,
 	declaration:   Declaration,
@@ -94,7 +95,7 @@ new_entity :: proc(kind: u32, name, docs: string, file_index: u32, declaration: 
 
 is_builtin_type :: proc(name: string) -> bool {
 	switch name {
-	case "bool", "b8", "b16", "b32", "b64", "int", "uint", "uintptr", "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f16", "f32", "f64", "complex32", "complex64", "complex128", "quaternion64", "quaternion128", "quaternion256", "rawptr", "cstring", "typeid", "any", "string", "rune": return true
+	case "bool", "b8", "b16", "b32", "b64", "int", "uint", "uintptr", "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "i16le", "i16be", "i32le", "i32be", "i64le", "i64be", "u16le", "u16be", "u32le", "u32be", "u64le", "u64be", "f16", "f32", "f64", "complex32", "complex64", "complex128", "quaternion64", "quaternion128", "quaternion256", "rawptr", "cstring", "typeid", "any", "string", "rune": return true
 	}
 	return false
 }
@@ -765,6 +766,24 @@ find_package_entity :: proc(document: ^doc.Document, package_index: u32, name: s
 	return 0
 }
 
+// An imported alias is semantically established only when its qualifier maps
+// to a discovered package. Qualified names from dependencies outside the
+// selected source root deliberately remain unresolved.
+alias_target_package :: proc(workspace: ^Workspace, file: Source_File, target: string) -> (package_index: i32, name: string) {
+	separator := strings.index(target, ".")
+	if separator <= 0 || separator+1 >= len(target) do return -1, target
+	qualifier := target[:separator]
+	name = target[separator+1:]
+	if strings.contains(name, ".") do return -1, target
+	for imp in file.imports {
+		if imp.target_package < 0 || int(imp.target_package) >= len(workspace.packages) do continue
+		import_name := imp.alias
+		if len(import_name) == 0 do import_name = workspace.packages[imp.target_package].name
+		if import_name == qualifier do return i32(imp.target_package), name
+	}
+	return -1, target
+}
+
 resolve_direct_aliases :: proc(document: ^doc.Document, pending: []Alias_Pending, result: ^Lower_Result, allocator: mem.Allocator) {
 	if document == nil do return
 	resolved := make([]bool, len(pending), context.temp_allocator)
@@ -772,7 +791,8 @@ resolve_direct_aliases :: proc(document: ^doc.Document, pending: []Alias_Pending
 		progress := false
 		for item, index in pending {
 			if resolved[index] do continue
-			target_index := find_package_entity(document, item.package_index, item.target)
+			target_package := item.package_index if item.target_package < 0 else u32(item.target_package)
+			target_index := find_package_entity(document, target_package, item.target)
 			if target_index == 0 || int(target_index) >= len(document.entities) do continue
 			target := document.entities[target_index]
 			if target.type == 0 do continue
@@ -915,16 +935,28 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 				if declaration.kind == .Constant {
 					initializer := source_after(declaration.source, "::")
 					if target := direct_alias_target(initializer); len(target) > 0 {
-						entity.flags |= SOURCE_ENTITY_FLAG_TYPE_EXPRESSION
-						entity.init_string = target
-						entity.type, _ = add_annotation_type(&result.document, target, allocator)
-						append(&result.document.entities, entity)
-						entity_index := u32(len(result.document.entities)-1)
-						append(&out_package.entries, doc.Scope_Entry{name = declaration.name, entity = entity_index})
-						append(&pending_aliases, Alias_Pending{package_index = package_index, entity_index = entity_index, file = file, declaration = declaration, target = target})
-						continue
-					}
-					if constant_initializer_is_structural_type(initializer) {
+						if is_builtin_type(target) {
+							// The lightweight declaration parser cannot distinguish a
+							// named type from a value alias by punctuation alone. A
+							// predeclared type is unambiguous source evidence.
+							entity.kind = 3
+							entity.type, _ = add_annotation_type(&result.document, target, allocator)
+							entity.init_string = target
+						} else {
+							entity.flags |= SOURCE_ENTITY_FLAG_TYPE_EXPRESSION
+							entity.init_string = target
+							entity.type, _ = add_annotation_type(&result.document, target, allocator)
+							append(&result.document.entities, entity)
+							entity_index := u32(len(result.document.entities)-1)
+							append(&out_package.entries, doc.Scope_Entry{name = declaration.name, entity = entity_index})
+							target_package, target_name := alias_target_package(workspace, file, target)
+							// Source packages are zero-based while the public document
+							// reserves index zero as its null package.
+							if target_package >= 0 do target_package += 1
+							append(&pending_aliases, Alias_Pending{package_index = package_index, target_package = target_package, entity_index = entity_index, file = file, declaration = declaration, target = target_name})
+							continue
+						}
+					} else if constant_initializer_is_structural_type(initializer) {
 						entity.type, proven = add_annotation_type(&result.document, initializer, allocator)
 					} else {
 						entity.type = append_constant_type(&result.document, initializer, allocator)

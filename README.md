@@ -22,6 +22,8 @@ actual code, tests, documentation, and release practice.
   compatible artifacts, with directory-style package routes.
 - Discover target-appropriate Odin source files using build tags and trailing
   platform suffixes such as `_js.odin` and `_linux_amd64.odin`.
+- Resolve direct aliases and re-exports through discovered relative and
+  collection-qualified imports, retaining their target declaration graph.
 - Lower documented structs, enums, unions, bit sets, bit fields, array and
   pointer type declarations, and procedure groups into structured document
   data. Member documentation, inline comments, enum values, indentation, and
@@ -37,9 +39,10 @@ actual code, tests, documentation, and release practice.
 
 Source mode is experimental and is not compiler-equivalent. It does not yet
 cover the full Odin grammar, semantic resolution, complete visibility and
-attribute handling, aliases/re-exports, or complete import and collection
-behaviour. Varde reports facts it cannot establish and refuses incomplete
-output unless `--allow-incomplete` is supplied.
+attribute handling, aliases/re-exports from dependencies outside the selected
+source root, or complete import and collection behaviour. Varde reports facts
+it cannot establish and refuses incomplete output unless `--allow-incomplete`
+is supplied.
 
 The project intentionally does not invoke, download, bundle, or discover an
 Odin executable at Varde runtime. Odin is needed only to compile Varde itself.

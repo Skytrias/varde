@@ -496,19 +496,43 @@ find_package :: proc(workspace: ^Workspace, path: string) -> int {
 	return -1
 }
 
+// collection_import_package resolves an import such as `core:image` only
+// when exactly one discovered package has the corresponding on-disk suffix.
+// Everything else remains external: source mode must not guess collection
+// roots or fabricate a dependency edge.
+collection_import_package :: proc(workspace: ^Workspace, import_path: string) -> int {
+	separator := strings.index(import_path, ":")
+	if separator <= 0 || separator+1 >= len(import_path) do return -1
+	suffix := strings.concatenate({"/", import_path[:separator], "/", import_path[separator+1:]}, context.temp_allocator)
+	match := -1
+	for pkg, index in workspace.packages {
+		if !strings.has_suffix(pkg.path, suffix) do continue
+		if match >= 0 do return -1
+		match = index
+	}
+	return match
+}
+
 resolve_imports :: proc(workspace: ^Workspace, allocator: mem.Allocator) {
 	for package_index := 0; package_index < len(workspace.packages); package_index += 1 {
 		for file_index := 0; file_index < len(workspace.packages[package_index].files); file_index += 1 {
 			file := &workspace.packages[package_index].files[file_index]
 			for import_index := 0; import_index < len(file.imports); import_index += 1 {
 				imp := &file.imports[import_index]
-				if !strings.has_prefix(imp.path, ".") do continue // collection/import-name path
-				candidate, err := filepath.join({filepath.dir(file.path), imp.path}, context.temp_allocator)
-				if err != nil do continue
-				clean, clean_err := filepath.clean(candidate, context.temp_allocator)
-				if clean_err != nil do continue
-				imp.target_package = find_package(workspace, clean)
+				if strings.has_prefix(imp.path, ".") {
+					candidate, err := filepath.join({filepath.dir(file.path), imp.path}, context.temp_allocator)
+					if err != nil do continue
+					clean, clean_err := filepath.clean(candidate, context.temp_allocator)
+					if clean_err != nil do continue
+					imp.target_package = find_package(workspace, clean)
+				} else {
+					imp.target_package = collection_import_package(workspace, imp.path)
+				}
 				if imp.target_package < 0 {
+					// Collection imports are often intentionally external to the
+					// selected source root, so only unresolved relative imports are
+					// extraction diagnostics.
+					if !strings.has_prefix(imp.path, ".") do continue
 					message := message_with_path("relative import does not resolve to a discovered package: ", imp.path, allocator)
 					add_diagnostic(workspace, .Unresolved_Import, file.path, imp.line, imp.column, message, allocator)
 					delete(message, allocator)

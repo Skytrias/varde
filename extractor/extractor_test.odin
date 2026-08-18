@@ -191,12 +191,14 @@ lower_preserves_enum_cases_comments_and_values :: proc(t: ^testing.T) {
 	testing.expect(t, invalid.name == "INVALID" && invalid.init_string == "0" && invalid.comment == "If not V5, this field will just be zero-initialized and not valid.", "inline enum field comments should survive source lowering")
 	testing.expect(t, abs_colorimetric.name == "ABS_COLORIMETRIC" && abs_colorimetric.init_string == "8", "hexadecimal enum values should render as the documented decimal value")
 	rgba := document_entity_by_name(&result.document, "RGBA_Pixel")
+	little_endian_count := document_entity_by_name(&result.document, "Little_Endian_Count")
 	union_entity := document_entity_by_name(&result.document, "Pixel_Union")
 	flags := document_entity_by_name(&result.document, "Pixel_Flags")
 	distinct_flags := document_entity_by_name(&result.document, "Distinct_Pixel_Flags")
 	bits := document_entity_by_name(&result.document, "Pixel_Bits")
 	load := document_entity_by_name(&result.document, "Load")
 	testing.expect(t, rgba != nil && rgba.kind == 3 && rgba.init_string == "[4]u8" && result.document.types[rgba.type].kind == 5, "array declarations should follow the compiler's type-entity representation")
+	testing.expect(t, little_endian_count != nil && little_endian_count.kind == 3 && result.document.types[little_endian_count.type].name == "u32le", "predeclared endian types should be type declarations, not unresolved aliases")
 	testing.expect(t, union_entity != nil && result.document.types[union_entity.type].kind == 11 && len(result.document.types[union_entity.type].types) == 3, "union variants should survive source lowering")
 	if union_entity != nil {
 		union_type := result.document.types[union_entity.type]
@@ -244,4 +246,33 @@ lower_preserves_local_aliases_literal_variables_and_top_level_scope :: proc(t: ^
 	testing.expect(t, distinct_bytes != nil && result.document.types[distinct_bytes.type].kind == 5 && result.document.types[distinct_bytes.type].elem_counts[0] == 8 && distinct_bytes.init_string == "distinct [8]u32")
 	testing.expect(t, predicate != nil && result.document.types[predicate.type].kind == 14 && predicate.init_string == "#type proc(value: int) -> bool")
 	testing.expect(t, run != nil && run_alias != nil && run_alias.kind == 4 && run_alias.type == run.type)
+}
+
+@(test)
+lower_resolves_aliases_from_discovered_imports :: proc(t: ^testing.T) {
+	workspace := Extract(Config{root_path = "extractor/fixtures/aliases", target_os = "linux", target_arch = "amd64"})
+	defer Destroy(&workspace)
+	main_index := package_index_by_name(&workspace, "main")
+	testing.expect(t, main_index >= 0 && len(workspace.packages[main_index].files) == 1 && len(workspace.packages[main_index].files[0].imports) == 1 && workspace.packages[main_index].files[0].imports[0].target_package >= 0, "relative aliases should resolve to their discovered import package")
+	result := Lower(&workspace, {incomplete_policy = .Reject})
+	defer Lower_Result_Destroy(&result)
+	testing.expect(t, result.complete && len(result.diagnostics) == 0, "aliases to discovered imports should be established without the compiler")
+	remote_record := document_entity_by_name(&result.document, "Remote_Record")
+	remote_value := document_entity_by_name(&result.document, "Remote_Value")
+	shared_record := document_entity_by_name(&result.document, "Record")
+	shared_value := document_entity_by_name(&result.document, "Value")
+	testing.expect(t, remote_record != nil && shared_record != nil && remote_record.kind == shared_record.kind && remote_record.type == shared_record.type, "imported type aliases should retain the target declaration graph")
+	testing.expect(t, remote_value != nil && shared_value != nil && remote_value.kind == shared_value.kind && remote_value.type == shared_value.type, "imported value aliases should retain the target declaration graph")
+}
+
+@(test)
+lower_resolves_collection_aliases_inside_the_selected_source_root :: proc(t: ^testing.T) {
+	workspace := Extract(Config{root_path = "extractor/fixtures/collections", target_os = "linux", target_arch = "amd64"})
+	defer Destroy(&workspace)
+	result := Lower(&workspace, {incomplete_policy = .Reject})
+	defer Lower_Result_Destroy(&result)
+	testing.expect(t, result.complete && len(result.diagnostics) == 0, "a collection import should resolve when its package is inside the selected source root")
+	alias := document_entity_by_name(&result.document, "Shared_Record")
+	target := document_entity_by_name(&result.document, "Record")
+	testing.expect(t, alias != nil && target != nil && alias.kind == target.kind && alias.type == target.type, "collection aliases should preserve their target declaration graph")
 }
