@@ -121,6 +121,16 @@ source mode, and creates a timestamped ignored output directory under
 `.varde-preview/`. Set `SHOWCASE_PREVIEW_OUT` to retain a specific output
 path; the target refuses to overwrite an existing directory.
 
+When editing only the showcase catalog, use the fast preview:
+
+```sh
+make showcase-preview-fast PREVIEW_PORT=8787
+```
+
+It refreshes only `showcase/catalog/` in `.varde-preview/showcase`, verifies
+that its existing project sites are complete, and then serves it. Use the full
+`showcase-preview` target to create or rebuild that retained output.
+
 To rebuild after source changes, use the standard-library Python watcher:
 
 ```sh

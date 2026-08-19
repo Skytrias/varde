@@ -142,18 +142,43 @@ def build_sokol_odin(varde: Path, source: Path, destination: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--varde", required=True, type=Path, help="Path to the built Varde executable")
-    parser.add_argument("--output", required=True, type=Path, help="New directory for the Pages artifact")
+    parser.add_argument("--varde", type=Path, help="Path to the built Varde executable")
+    parser.add_argument("--output", required=True, type=Path, help="Pages artifact directory")
+    parser.add_argument(
+        "--catalog-only",
+        action="store_true",
+        help="Refresh catalog assets in an existing complete artifact without rebuilding project sites",
+    )
     args = parser.parse_args()
 
-    varde = args.varde.resolve()
     output = args.output.resolve()
+    if not CATALOG.is_dir():
+        parser.error(f"catalog assets are missing: {CATALOG}")
+
+    if args.catalog_only:
+        if not output.is_dir():
+            parser.error("--catalog-only requires an existing showcase output directory")
+        required = [
+            output / "projects" / project / "index.html"
+            for project in ("varde", "odin", "karl2d", "muninn", "sokol-odin")
+        ]
+        missing = [str(path) for path in required if not path.is_file()]
+        if missing:
+            raise RuntimeError(
+                "catalog-only refresh requires a complete existing showcase: "
+                + ", ".join(missing)
+            )
+        shutil.copytree(CATALOG, output, dirs_exist_ok=True)
+        print(f"Refreshed Varde showcase catalog at {output}")
+        return 0
+
+    if args.varde is None:
+        parser.error("--varde is required unless --catalog-only is used")
+    varde = args.varde.resolve()
     if not varde.is_file():
         parser.error(f"Varde executable does not exist: {varde}")
     if output.exists():
         parser.error(f"output directory already exists: {output}")
-    if not CATALOG.is_dir():
-        parser.error(f"catalog assets are missing: {CATALOG}")
 
     varde_repository = Repository("varde", VARDE_REPOSITORY_URL, checked_out_commit(ROOT))
 

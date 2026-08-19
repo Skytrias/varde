@@ -3,62 +3,60 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light dark">
-    <meta name="description" content="A small, offline documentation showcase built with Varde.">
-    <title>Varde Showcase</title>
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="A selected collection of offline documentation sites generated with Varde.">
+    <title>Selected works — Varde</title>
     <link rel="stylesheet" href="catalog.css">
   </head>
   <body>
-    <header class="site-header">
-      <a class="brand" href="index.html">Varde</a>
-      <a href="projects/varde/">About the generator</a>
+    <header class="site-header" id="top">
+      <a class="brand" href="index.html" aria-label="Varde showcase home">Varde</a>
+      <div class="header-meta"><a href="projects/varde/">About Varde <span aria-hidden="true">↗</span></a></div>
     </header>
     <main>
       <section class="hero">
-        <p class="eyebrow">Documentation showcase</p>
-        <h1>Browse projects built with Varde.</h1>
-        <p>Each project below is an independent, offline API reference. The catalog is only a doorway: Varde itself still produces one self-contained documentation site at a time.</p>
+        <h1>Varde</h1>
+        <p class="hero-kind">Doc-format static site generator</p>
+        <div class="hero-intro">
+          <p>Varde turns compatible <code>.odin-doc</code> artifacts into self-contained API documentation sites. Publish them anywhere, or open them locally—this collection shows the result across very different codebases.</p>
+          <div class="hero-actions"><a class="jump-link" href="#projects">Explore projects <span aria-hidden="true">↓</span></a><a class="about-link" href="projects/varde/">How Varde works <span aria-hidden="true">↗</span></a></div>
+        </div>
       </section>
 
-      <section aria-labelledby="project-list-heading">
+      <section class="projects" id="projects" aria-labelledby="project-list-heading">
         <div class="section-heading">
-          <h2 id="project-list-heading">Projects</h2>
-          <p>5 published references</p>
+          <div><h2 id="project-list-heading">Showcase projects</h2></div>
+          <p>Each reference opens independently<br>and works offline.</p>
         </div>
         <div class="project-list" id="project-list">
-          <article class="project-card" data-search="varde documentation generator odin toolchain">
-            <div class="project-card-heading"><h3>Varde</h3><span>Tooling</span></div>
-            <p>An experimental, compiler-free Odin documentation toolchain and static API-site builder.</p>
-            <p class="provenance">Varde source mode · pinned repository revision</p>
-            <div class="project-links"><a class="primary" href="projects/varde/">Browse documentation <span aria-hidden="true">→</span></a><a href="https://github.com/Skytrias/varde">Source</a></div>
+          <article class="project-card project-card--featured" data-search="varde documentation generator odin toolchain">
+            <div class="project-summary"><div class="project-card-heading"><h3>Varde</h3><span>Tooling</span></div><p>An experimental <code>.odin-doc</code> toolchain and static-site generator for self-contained Odin API documentation.</p></div>
+            <p class="provenance">Varde source mode <span>·</span> pinned repository revision</p>
+            <div class="project-links"><a class="primary" href="projects/varde/">Open documentation <span aria-hidden="true">→</span></a><a href="https://github.com/Skytrias/varde">Source <span aria-hidden="true">↗</span></a></div>
           </article>
           <article class="project-card" data-search="odin standard library base core vendor language">
-            <div class="project-card-heading"><h3>Odin</h3><span>Language</span></div>
-            <p>A broad reference for the Odin standard-library collections: base, core, and vendor.</p>
-            <p class="provenance">Varde source mode · explicitly incomplete</p>
-            <div class="project-links"><a class="primary" href="projects/odin/">Browse documentation <span aria-hidden="true">→</span></a><a href="https://github.com/odin-lang/Odin">Source</a></div>
+            <div class="project-summary"><div class="project-card-heading"><h3>Odin</h3><span>Language</span></div><p>A broad reference for the Odin standard-library collections: base, core, and vendor.</p></div>
+            <p class="provenance">Varde source mode <span>·</span> explicitly incomplete</p>
+            <div class="project-links"><a class="primary" href="projects/odin/">Open documentation <span aria-hidden="true">→</span></a><a href="https://github.com/odin-lang/Odin">Source <span aria-hidden="true">↗</span></a></div>
           </article>
           <article class="project-card" data-search="karl2d game library graphics audio web">
-            <div class="project-card-heading"><h3>Karl2D</h3><span>Game library</span></div>
-            <p>A beginner-friendly 2D game library for Odin, including desktop and web workflows.</p>
-            <p class="provenance">Compiler-produced .odin-doc · pinned repository revision</p>
-            <div class="project-links"><a class="primary" href="projects/karl2d/">Browse documentation <span aria-hidden="true">→</span></a><a href="https://github.com/karl-zylinski/karl2d">Source</a></div>
+            <div class="project-summary"><div class="project-card-heading"><h3>Karl2D</h3><span>Game library</span></div><p>A beginner-friendly 2D game library for Odin, including desktop and web workflows.</p></div>
+            <p class="provenance">Compiler-produced .odin-doc <span>·</span> pinned repository revision</p>
+            <div class="project-links"><a class="primary" href="projects/karl2d/">Open documentation <span aria-hidden="true">→</span></a><a href="https://github.com/karl-zylinski/karl2d">Source <span aria-hidden="true">↗</span></a></div>
           </article>
           <article class="project-card" data-search="muninn ecs entity component system relationships archetype">
-            <div class="project-card-heading"><h3>Muninn</h3><span>ECS</span></div>
-            <p>A fast archetype-based ECS for Odin, with support for relationships.</p>
-            <p class="provenance">Compiler-produced .odin-doc · pinned repository revision</p>
-            <div class="project-links"><a class="primary" href="projects/muninn/">Browse documentation <span aria-hidden="true">→</span></a><a href="https://github.com/GuilHartt/muninn">Source</a></div>
+            <div class="project-summary"><div class="project-card-heading"><h3>Muninn</h3><span>ECS</span></div><p>A fast archetype-based ECS for Odin, with support for relationships.</p></div>
+            <p class="provenance">Compiler-produced .odin-doc <span>·</span> pinned repository revision</p>
+            <div class="project-links"><a class="primary" href="projects/muninn/">Open documentation <span aria-hidden="true">→</span></a><a href="https://github.com/GuilHartt/muninn">Source <span aria-hidden="true">↗</span></a></div>
           </article>
           <article class="project-card" data-search="sokol odin bindings graphics audio app">
-            <div class="project-card-heading"><h3>sokol-odin</h3><span>Bindings</span></div>
-            <p>Odin bindings for the sokol headers, assembled from each public binding package.</p>
-            <p class="provenance">Compiler-produced .odin-doc set · deterministic merge</p>
-            <div class="project-links"><a class="primary" href="projects/sokol-odin/">Browse documentation <span aria-hidden="true">→</span></a><a href="https://github.com/floooh/sokol-odin">Source</a></div>
+            <div class="project-summary"><div class="project-card-heading"><h3>sokol-odin</h3><span>Bindings</span></div><p>Odin bindings for the sokol headers, assembled from each public binding package.</p></div>
+            <p class="provenance">Compiler-produced .odin-doc set <span>·</span> deterministic merge</p>
+            <div class="project-links"><a class="primary" href="projects/sokol-odin/">Open documentation <span aria-hidden="true">→</span></a><a href="https://github.com/floooh/sokol-odin">Source <span aria-hidden="true">↗</span></a></div>
           </article>
         </div>
       </section>
     </main>
-    <footer>Generated project references use <a href="https://github.com/Skytrias/varde">Varde</a>. Project names and descriptions belong to their respective maintainers.</footer>
+    <footer><p>Generated project references use <a href="https://github.com/Skytrias/varde">Varde</a>. Project names and descriptions belong to their respective maintainers.</p><a class="footer-top" href="#top">Back to top <span aria-hidden="true">↑</span></a></footer>
   </body>
 </html>
