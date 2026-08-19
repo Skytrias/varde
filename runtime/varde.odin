@@ -533,6 +533,7 @@ site_render_indexes_build :: proc(model: ^Model, allocator: mem.Allocator = cont
 		by_path = make(map[string]^Package, len(model.packages), allocator),
 	}
 	for &pkg in model.packages {
+		if !site_package_is_renderable(pkg) do continue
 		indexes.by_relative_path[pkg.relative_path] = &pkg
 		indexes.by_path[pkg.path] = &pkg
 		entry_capacity := 0
@@ -675,6 +676,7 @@ site_package_find_relative :: proc(indexes: ^Site_Render_Indexes, model: ^Model,
 		if ok do return pkg
 	}
 	for &pkg in model.packages {
+		if !site_package_is_renderable(pkg) do continue
 		if pkg.relative_path == relative_path do return &pkg
 	}
 	return nil
@@ -687,6 +689,7 @@ site_package_find_path :: proc(indexes: ^Site_Render_Indexes, model: ^Model, pac
 		if ok do return pkg
 	}
 	for &pkg in model.packages {
+		if !site_package_is_renderable(pkg) do continue
 		clean, err := filepath.clean(pkg.path, context.temp_allocator)
 		if err == nil && clean == package_path do return &pkg
 	}
@@ -1038,6 +1041,109 @@ package_symbol_count :: proc(pkg: Package) -> int {
 	return count
 }
 
+// The upstream pkg.odin-lang.org renderer admits a package only when it has
+// public scope entries and its collection-relative path does not contain "/_".
+// Keep this strictly in the render layer: .odin-doc input and Varde's model
+// retain hidden helper packages for data fidelity and non-rendering consumers.
+//
+// Deliberately do not broaden this to names such as "tests" or "tools". The
+// upstream rule is path-based, and a collection-root package named "_foo" is
+// not excluded because it has no "/_" segment.
+site_package_is_renderable :: proc(pkg: Package) -> bool {
+	if package_symbol_count(pkg) == 0 do return false
+	return !strings.contains(pkg.relative_path, "/_")
+}
+
+site_render_stats :: proc(model: ^Model) -> Stats {
+	if model == nil do return {}
+	stats := Stats{sloc = model.stats.sloc}
+	for pkg in model.packages {
+		if !site_package_is_renderable(pkg) do continue
+		stats.package_count += 1
+		stats.file_count += len(pkg.files)
+		stats.entry_count += package_symbol_count(pkg)
+	}
+	return stats
+}
+
+@(test)
+test_site_renderer_matches_upstream_package_visibility_rule :: proc(t: ^testing.T) {
+	visible := Package{relative_path = "core/crypto/aes", files = make([dynamic]File, 0, 1)}
+	defer {
+		delete(visible.files[0].entries)
+		delete(visible.files)
+	}
+	visible_file := File{entries = make([dynamic]Entry, 0, 1)}
+	append(&visible_file.entries, Entry{name = "Encrypt"})
+	append(&visible.files, visible_file)
+
+	underscore_helper := visible
+	underscore_helper.relative_path = "core/crypto/_aes/ct64"
+	empty := Package{relative_path = "core/crypto/hash", files = make([dynamic]File, 0, 1)}
+	defer {
+		delete(empty.files[0].entries)
+		delete(empty.files)
+	}
+	append(&empty.files, File{entries = make([dynamic]Entry, 0)})
+	collection_root_underscore := visible
+	collection_root_underscore.relative_path = "_private"
+
+	testing.expect(t, site_package_is_renderable(visible), "public packages with entries should render")
+	testing.expect(t, !site_package_is_renderable(underscore_helper), "a nested underscore path must be hidden like pkg.odin-lang.org")
+	testing.expect(t, !site_package_is_renderable(empty), "packages without public entries must not get pages")
+	testing.expect(t, site_package_is_renderable(collection_root_underscore), "the upstream /_ rule does not hide a collection-root underscore name")
+}
+
+@(test)
+test_site_build_excludes_upstream_hidden_packages_everywhere :: proc(t: ^testing.T) {
+	root, root_err := os.make_directory_temp("", "varde-render-filter-*", context.temp_allocator)
+	testing.expect(t, root_err == nil, "temporary renderer-filter workspace should be created")
+	defer _ = os.remove_all(root)
+
+	model := Model{workspace_path = root, stats = {package_count = 3, file_count = 3, entry_count = 2}}
+	model.packages = make([dynamic]Package, 0, 3)
+	defer {
+		for &pkg in model.packages {
+			for &file in pkg.files do delete(file.entries)
+			delete(pkg.files)
+		}
+		delete(model.packages)
+	}
+	visible := Package{name = "aes", relative_path = "core/crypto/aes", files = make([dynamic]File, 0, 1)}
+	visible_file := File{name = "aes.odin", entries = make([dynamic]Entry, 0, 1)}
+	append(&visible_file.entries, Entry{name = "Encrypt", anchor = "Encrypt", kind = "Procedures", signature = "Encrypt :: proc()"})
+	append(&visible.files, visible_file)
+	append(&model.packages, visible)
+	hidden := Package{name = "_aes", relative_path = "core/crypto/_aes", files = make([dynamic]File, 0, 1)}
+	hidden_file := File{name = "internal.odin", entries = make([dynamic]Entry, 0, 1)}
+	append(&hidden_file.entries, Entry{name = "Hidden", anchor = "Hidden", kind = "Procedures", signature = "Hidden :: proc()"})
+	append(&hidden.files, hidden_file)
+	append(&model.packages, hidden)
+	empty := Package{name = "empty", relative_path = "core/crypto/empty", files = make([dynamic]File, 0, 1)}
+	append(&empty.files, File{name = "empty.odin", entries = make([dynamic]Entry, 0)})
+	append(&model.packages, empty)
+
+	config := config_default(root, "Filter", "Renderer policy test.")
+	result := build(&model, config, {})
+	testing.expect(t, result.ok && result.package_count == 1 && result.entry_count == 1, "only the public package should be reported as rendered")
+	site_root := path_join({root, config.output_dir})
+	visible_page := path_join({site_root, "packages", "core", "crypto", "aes", "index.html"})
+	hidden_page := path_join({site_root, "packages", "core", "crypto", "_aes", "index.html"})
+	empty_page := path_join({site_root, "packages", "core", "crypto", "empty", "index.html"})
+	testing.expect(t, os.exists(visible_page), "visible packages should retain their page")
+	testing.expect(t, !os.exists(hidden_page) && !os.exists(empty_page), "hidden and empty packages must not get pages")
+
+	index_data, index_err := os.read_entire_file(path_join({site_root, "index.html"}), context.temp_allocator)
+	defer if index_err == nil do delete(index_data, context.temp_allocator)
+	search_data, search_err := os.read_entire_file(path_join({site_root, "assets", "search-index.js"}), context.temp_allocator)
+	defer if search_err == nil do delete(search_data, context.temp_allocator)
+	manifest_data, manifest_err := os.read_entire_file(path_join({site_root, SITE_MANIFEST_FILE_NAME}), context.temp_allocator)
+	defer if manifest_err == nil do delete(manifest_data, context.temp_allocator)
+	testing.expect(t, index_err == nil && !strings.contains(string(index_data), "_aes") && !strings.contains(string(index_data), "empty"), "the package directory and homepage metrics must omit excluded packages")
+	testing.expect(t, search_err == nil && strings.contains(string(search_data), "Encrypt") && !strings.contains(string(search_data), "Hidden") && !strings.contains(string(search_data), "_aes"), "excluded packages must not leak into offline search")
+	testing.expect(t, manifest_err == nil && strings.contains(string(manifest_data), "\"packages\": 1") && strings.contains(string(manifest_data), "\"symbols\": 1"), "the manifest must report rendered rather than input package counts")
+}
+
 write_grouped_count :: proc(builder: ^strings.Builder, count: int) {
 	text := fmt.tprintf("%d", count)
 	first_digit := 0
@@ -1092,6 +1198,7 @@ package_tree_build :: proc(model: ^Model) -> [dynamic]Package_Tree_Node {
 	nodes := make([dynamic]Package_Tree_Node, 0, max(1, len(model.packages) * 2), context.temp_allocator)
 	append(&nodes, Package_Tree_Node{package_index = -1})
 	for pkg, package_index in model.packages {
+		if !site_package_is_renderable(pkg) do continue
 		segments := strings.split(pkg.relative_path, "/", context.temp_allocator)
 		current_index := 0
 		for segment in segments {
@@ -1171,9 +1278,10 @@ write_index_page :: proc(model: ^Model, config: Config, extensions: Site_Extensi
 	strings.write_string(&builder, "<main id=\"main\" class=\"home\"><section class=\"hero\">")
 	if config.include_brand_artwork { strings.write_string(&builder, "<img src=\"assets/brand-mark.png\" width=\"64\" height=\"64\" alt=\"Project mark\">") }
 	strings.write_string(&builder, "<h1>"); html_text(&builder, config.title); strings.write_string(&builder, "</h1><p>"); html_text(&builder, config.description); strings.write_string(&builder, "</p></section><section class=\"metrics\" aria-label=\"Workspace statistics\"><span>")
-	write_grouped_count(&builder, model.stats.package_count)
-	strings.write_string(&builder, " packages</span><span>"); write_grouped_count(&builder, model.stats.file_count)
-	strings.write_string(&builder, " files</span><span>"); write_grouped_count(&builder, model.stats.entry_count)
+	render_stats := site_render_stats(model)
+	write_grouped_count(&builder, render_stats.package_count)
+	strings.write_string(&builder, " packages</span><span>"); write_grouped_count(&builder, render_stats.file_count)
+	strings.write_string(&builder, " files</span><span>"); write_grouped_count(&builder, render_stats.entry_count)
 	strings.write_string(&builder, " symbols</span><span>"); write_grouped_count(&builder, model.stats.sloc)
 	strings.write_string(&builder, " SLOC</span></section>")
 	strings.write_string(&builder, "<section class=\"package-directory\"><div class=\"section-heading\"><h2>Package directory</h2><p>The workspace hierarchy, preserved for browsing.</p></div>")
@@ -1322,6 +1430,7 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 	strings.write_string(&builder, "window.VARDE_SEARCH_INDEX=[")
 	first := true
 	for pkg in model.packages {
+		if !site_package_is_renderable(pkg) do continue
 		package_path := package_url_path(pkg)
 		package_context := pkg.relative_path
 		first = search_index_entry_write(
@@ -1368,6 +1477,7 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 }
 
 write_manifest :: proc(output_root: string, config: Config, model: ^Model) -> string {
+	render_stats := site_render_stats(model)
 	builder: strings.Builder
 	defer strings.builder_destroy(&builder)
 	strings.write_string(&builder, "{\n  \"generator\": \"Varde\",\n  \"schema_version\": ")
@@ -1375,9 +1485,9 @@ write_manifest :: proc(output_root: string, config: Config, model: ^Model) -> st
 	strings.write_string(&builder, ",\n  \"title\": ")
 	fmt.sbprintf(&builder, "%q", config.title)
 	strings.write_string(&builder, ",\n  \"packages\": ")
-	fmt.sbprintf(&builder, "%d", model.stats.package_count)
+	fmt.sbprintf(&builder, "%d", render_stats.package_count)
 	strings.write_string(&builder, ",\n  \"symbols\": ")
-	fmt.sbprintf(&builder, "%d", model.stats.entry_count)
+	fmt.sbprintf(&builder, "%d", render_stats.entry_count)
 	strings.write_string(&builder, ",\n  \"source_links\": ")
 	if config.include_source_links {
 		strings.write_string(&builder, "true")
@@ -1422,16 +1532,18 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 	if err := write_index_page(model, index_config, extensions, staging); len(err) > 0 { result.error_message = err; return result }
 	for &pkg in model.packages {
 		if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }
+		if !site_package_is_renderable(pkg) do continue
 		if err := write_package_page(model, &indexes, &pkg, config, extensions, staging); len(err) > 0 { result.error_message = err; return result }
 	}
 	if err := write_manifest(staging, config, model); len(err) > 0 { result.error_message = err; return result }
 	if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }
 	if os.exists(output_root) { if err := os.remove_all(output_root); err != nil { result.error_message = "Could not replace prior Varde site output"; return result } }
 	if err := os.rename(staging, output_root); err != nil { result.error_message = "Could not finalize generated site"; return result }
+	render_stats := site_render_stats(model)
 	result.ok = true
 	result.output_path = output_root
-	result.package_count = model.stats.package_count
-	result.entry_count = model.stats.entry_count
+	result.package_count = render_stats.package_count
+	result.entry_count = render_stats.entry_count
 	return result
 }
 
@@ -1543,10 +1655,21 @@ test_markup_supports_reference_comment_blocks_and_inline_links :: proc(t: ^testi
 test_package_tree_preserves_workspace_nesting :: proc(t: ^testing.T) {
 	model := Model{workspace_path = "/workspace"}
 	model.packages = make([dynamic]Package, 0, 3)
-	defer delete(model.packages)
-	append(&model.packages, Package{name = "src", relative_path = "src"})
-	append(&model.packages, Package{name = "feature", relative_path = "src/feature"})
-	append(&model.packages, Package{name = "ui", relative_path = "shared/ui"})
+	defer {
+		for &pkg in model.packages {
+			for &file in pkg.files do delete(file.entries)
+			delete(pkg.files)
+		}
+		delete(model.packages)
+	}
+	pairs := [3][2]string{[2]string{"src", "src"}, [2]string{"feature", "src/feature"}, [2]string{"ui", "shared/ui"}}
+	for pair in pairs {
+		pkg := Package{name = pair[0], relative_path = pair[1], files = make([dynamic]File, 0, 1)}
+		file := File{entries = make([dynamic]Entry, 0, 1)}
+		append(&file.entries, Entry{name = pair[0]})
+		append(&pkg.files, file)
+		append(&model.packages, pkg)
+	}
 	builder: strings.Builder
 	defer strings.builder_destroy(&builder)
 	write_package_tree(&builder, &model, "/out/index.html", "/out", "src/feature", true, false)
@@ -1567,9 +1690,21 @@ test_package_tree_preserves_workspace_nesting :: proc(t: ^testing.T) {
 test_workspace_collection_imports_resolve_for_links :: proc(t: ^testing.T) {
 	model := Model{workspace_path = "/workspace"}
 	model.packages = make([dynamic]Package, 0, 2)
-	defer delete(model.packages)
-	append(&model.packages, Package{name = "app", path = "/workspace/src", relative_path = "src"})
-	append(&model.packages, Package{name = "ui", path = "/workspace/shared/corbel/ui", relative_path = "shared/corbel/ui"})
+	defer {
+		for &pkg in model.packages {
+			for &file in pkg.files do delete(file.entries)
+			delete(pkg.files)
+		}
+		delete(model.packages)
+	}
+	triples := [2][3]string{[3]string{"app", "/workspace/src", "src"}, [3]string{"ui", "/workspace/shared/corbel/ui", "shared/corbel/ui"}}
+	for triple in triples {
+		pkg := Package{name = triple[0], path = triple[1], relative_path = triple[2], files = make([dynamic]File, 0, 1)}
+		file := File{entries = make([dynamic]Entry, 0, 1)}
+		append(&file.entries, Entry{name = triple[0]})
+		append(&pkg.files, file)
+		append(&model.packages, pkg)
+	}
 	target := site_package_for_import(nil, &model, &model.packages[0], "shared:corbel/ui")
 	testing.expect(t, target != nil && target.relative_path == "shared/corbel/ui", "collection-qualified imports should resolve to their workspace package")
 }

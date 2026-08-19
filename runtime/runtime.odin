@@ -147,7 +147,7 @@ runtime_finish_site :: proc(result: ^Runtime_Build_Result, model: ^Model, config
 	}
 	result.output_path = runtime_string_clone(site.output_path, allocator)
 	result.package_count = site.package_count
-	result.file_count = model.stats.file_count
+	result.file_count = site_render_stats(model).file_count
 	result.entry_count = site.entry_count
 	return true
 }
