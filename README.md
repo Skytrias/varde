@@ -25,12 +25,19 @@ actual code, tests, documentation, and release practice.
 - Resolve direct aliases and re-exports through discovered relative and
   collection-qualified imports, retaining their target declaration graph.
 - Lower documented structs, enums, unions, bit sets, bit fields, array and
-  pointer type declarations, and procedure groups into structured document
-  data. Member documentation, inline comments, enum values, indentation, and
-  source positions are retained where the source syntax establishes them.
+  pointer type declarations, procedure-typed fields, and procedure groups into
+  structured document data. Member documentation, inline comments, enum
+  values, indentation, and source positions are retained where the source
+  syntax establishes them.
 - Render those structured declarations as readable source-like signatures,
-  including procedure groups such as `load :: proc{load_from_bytes,
-  load_from_file}`.
+  including `proc()` function fields, function parameters and results, and
+  procedure groups such as `load :: proc{load_from_bytes, load_from_file}`.
+- Organize package pages by declaration kind (types, constants, variables,
+  procedures, and procedure groups), alphabetize entries inside each group,
+  and provide grouped in-page navigation with offline fuzzy search.
+- Syntax-highlight declaration signatures with safe cross-links: actual
+  references can link to documented declarations, while struct-field and
+  parameter labels remain plain text.
 - Build a site directly from source when all required facts can be established
   without compiler execution, or emit an explicitly incomplete site with
   `--allow-incomplete`.

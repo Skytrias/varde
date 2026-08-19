@@ -59,6 +59,14 @@ ignored; generated CI and preview output is also ignored.
 - Preserve declaration order, source positions, flags, attributes,
   aliases/re-exports, and structured type information when the source supports
   it. Do not fabricate unavailable facts.
+- Preserve structured procedure types faithfully: distinguish an empty
+  parameter list (`proc()`) from unavailable data, and retain known procedure
+  parameters and results, including when procedures occur in field types.
+- Group package-page declarations by kind and sort each group alphabetically.
+  Keep its in-page index and scroll state in the same order as the content.
+- Semantic links may target resolvable declaration references, but never link
+  local labels such as struct fields or procedure parameters merely because a
+  declaration has the same name.
 - Treat documentation comments as authored prose. Do not rewrite paths within
   them.
 - Do not restore ignored documentation or build output to the public repository
