@@ -77,6 +77,13 @@ document_workspace_route_path :: proc(adapter: ^Document_Model, workspace_path, 
 	return document_route_path(adapter, fullpath, fallback, allocator)
 }
 
+document_package_is_within_workspace :: proc(workspace_path, fullpath: string) -> bool {
+	if len(workspace_path) == 0 || len(fullpath) == 0 do return false
+	workspace_base := workspace_path_relative_base(workspace_path, context.temp_allocator)
+	relative, err := filepath.rel(workspace_base, fullpath, context.temp_allocator)
+	return err == nil && relative != ".." && !strings.has_prefix(relative, "../") && !strings.has_prefix(relative, "..\\")
+}
+
 document_entity_kind :: proc(kind: u32) -> string {
 	switch kind {
 	case 1: return "Constants"
@@ -424,7 +431,7 @@ document_file_index :: proc(pkg: ^Package, path: string) -> int {
 // Model_From_Doc_Workspace adapts selected packages only. It does not invent
 // import edges or SLOC because the public format cannot represent those facts.
 // Structured signatures and semantic cross-links are deliberately added in M2.
-Model_From_Doc_Workspace :: proc(workspace: ^doc.Workspace, workspace_path: string, allocator: mem.Allocator = context.allocator) -> Document_Model {
+Model_From_Doc_Workspace_Filtered :: proc(workspace: ^doc.Workspace, workspace_path: string, workspace_packages_only: bool, allocator: mem.Allocator = context.allocator) -> Document_Model {
 	adapter := Document_Model{model = {workspace_path = workspace_path}, _owned_strings = make([dynamic]string, 0, 64, allocator)}
 	adapter.model.packages = make([dynamic]Package, 0, 16, allocator)
 	if workspace == nil do return adapter
@@ -433,6 +440,7 @@ Model_From_Doc_Workspace :: proc(workspace: ^doc.Workspace, workspace_path: stri
 		document := workspace.documents[selected.document_index]
 		if document == nil || int(selected.package_index) >= len(document.packages) do continue
 		source_pkg := document.packages[selected.package_index]
+		if workspace_packages_only && !document_package_is_within_workspace(workspace_path, source_pkg.fullpath) do continue
 		pkg := Package{id = source_pkg.fullpath, name = source_pkg.name, path = source_pkg.fullpath, relative_path = document_workspace_route_path(&adapter, workspace_path, source_pkg.fullpath, source_pkg.name, allocator), overview = source_pkg.docs, summary = source_pkg.docs, files = make([dynamic]File, 0, len(source_pkg.files), allocator)}
 		for file_index in source_pkg.files {
 			if file_index == 0 || int(file_index) >= len(document.files) do continue
@@ -458,6 +466,16 @@ Model_From_Doc_Workspace :: proc(workspace: ^doc.Workspace, workspace_path: stri
 		append(&adapter.model.packages, pkg)
 	}
 	return adapter
+}
+
+Model_From_Doc_Workspace :: proc(workspace: ^doc.Workspace, workspace_path: string, allocator: mem.Allocator = context.allocator) -> Document_Model {
+	return Model_From_Doc_Workspace_Filtered(workspace, workspace_path, false, allocator)
+}
+
+@(test)
+test_document_package_workspace_scope :: proc(t: ^testing.T) {
+	testing.expect(t, document_package_is_within_workspace("/work/project", "/work/project/api"), "packages under the selected workspace should be in scope")
+	testing.expect(t, !document_package_is_within_workspace("/work/project", "/work/compiler/core"), "compiler dependency packages must remain outside a workspace-scoped site")
 }
 
 @(test)

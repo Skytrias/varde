@@ -17,7 +17,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
 
     steps:
       - name: Check out source
@@ -43,12 +43,16 @@ jobs:
           make build-cli
           test -s dist/varde
 
-      - name: Build Varde's documentation site
+      - name: Build the Varde documentation showcase
         run: |
           set -euo pipefail
-          ./dist/varde build --source . --allow-incomplete --out _site
+          python3 tools/build_showcase.py --varde "$GITHUB_WORKSPACE/dist/varde" --output "$GITHUB_WORKSPACE/_site"
           test -f _site/index.html
-          test -f _site/varde-site-manifest.json
+          test -f _site/projects/varde/index.html
+          test -f _site/projects/odin/index.html
+          test -f _site/projects/karl2d/index.html
+          test -f _site/projects/muninn/index.html
+          test -f _site/projects/sokol-odin/index.html
 
       # This makes the executable available for troubleshooting or manual
       # testing. It is intentionally not a release asset or supported binary.

@@ -266,7 +266,7 @@ Runtime_Build :: proc(request: Runtime_Build_Request, allocator: mem.Allocator =
 		return result
 	}
 	runtime_append_merge_diagnostics(&result, document_workspace, allocator)
-	adapter := Model_From_Doc_Workspace(&document_workspace, workspace_path, allocator)
+	adapter := Model_From_Doc_Workspace_Filtered(&document_workspace, workspace_path, config.workspace_packages_only, allocator)
 	defer Document_Model_Destroy(&adapter, allocator)
 	adapter.model.stats.sloc = request.document_sloc
 	result.complete = true

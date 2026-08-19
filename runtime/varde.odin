@@ -52,6 +52,7 @@ Config :: struct {
 	motion:                string `json:"motion"`,
 	code_tab_width:        int    `json:"code_tab_width"`,
 	collapse_package_tree: bool   `json:"collapse_package_tree"`,
+	workspace_packages_only: bool  `json:"workspace_packages_only"`,
 	head_html:             string `json:"head_html"`,
 	before_content_html:   string `json:"before_content_html"`,
 	after_content_html:    string `json:"after_content_html"`,
@@ -1694,12 +1695,12 @@ test_config_reads_legacy_vigil_site_and_writes_varde_config :: proc(t: ^testing.
 	testing.expect(t, err == nil, "temporary configuration root should be created")
 	defer _ = os.remove_all(root)
 	legacy_path := path_join({root, SITE_LEGACY_CONFIG_FILE_NAME})
-	legacy_config := `{"schema_version":2,"title":"Migrated","description":"A project","output_dir":"dist/docs","include_brand_artwork":false,"include_source_links":false,"source_url_prefix":"","theme":"dark"}`
+	legacy_config := `{"schema_version":2,"title":"Migrated","description":"A project","output_dir":"dist/docs","include_brand_artwork":false,"include_source_links":true,"source_url_prefix":"https://example.test/demo/blob/revision","theme":"dark"}`
 	write_err := os.write_entire_file(legacy_path, legacy_config)
 	testing.expect(t, write_err == nil, "legacy site configuration should be writable")
 	config, load_err := config_load(root, "", "")
 	defer config_destroy(&config)
-	testing.expect(t, len(load_err) == 0 && config.title == "Migrated" && config.output_dir == "dist/docs" && config.theme == THEME_MONOKAI && config.system_light_theme == THEME_ODIN_LIGHT && config.system_dark_theme == THEME_MONOKAI, "legacy Vigil configuration should remain usable and receive theme defaults")
+	testing.expect(t, len(load_err) == 0 && config.title == "Migrated" && config.output_dir == "dist/docs" && config.include_source_links && config.source_url_prefix == "https://example.test/demo/blob/revision" && config.theme == THEME_MONOKAI && config.system_light_theme == THEME_ODIN_LIGHT && config.system_dark_theme == THEME_MONOKAI, "legacy Vigil configuration should remain usable, preserve source-link settings, and receive theme defaults")
 	testing.expect(t, config.schema_version == SITE_SCHEMA_VERSION, "loaded configurations should migrate to Varde's schema")
 	save_err := config_save(root, config)
 	testing.expect(t, len(save_err) == 0 && os.exists(path_join({root, SITE_CONFIG_FILE_NAME})), "saving a migrated config should create varde.json")

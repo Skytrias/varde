@@ -73,6 +73,23 @@ make build-cli
 ./dist/varde build --doc path/to/project.odin-doc --out dist/varde
 ```
 
+## Source links
+
+Source links are opt-in because Varde cannot safely infer a public repository
+or revision from an arbitrary local folder. Add a `varde.json` to the project
+workspace when the source is available at a stable HTTPS location:
+
+```json
+{
+  "include_source_links": true,
+  "source_url_prefix": "https://github.com/owner/repository/blob/<commit>"
+}
+```
+
+Varde appends the workspace-relative file path and declaration line number to
+that prefix. Use an immutable commit or release tag for published sites; leave
+the setting off for local-only projects.
+
 ## Local preview
 
 For development convenience, Python is used temporarily to serve the generated
