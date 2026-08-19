@@ -356,8 +356,24 @@ document_append_type :: proc(builder: ^strings.Builder, budget: ^Document_Signat
 		document_signature_write(builder, budget, ")")
 	case 14:
 		document_signature_write(builder, budget, "proc")
-		document_append_type_child(builder, budget, document, typ, 0, depth, indent)
-		if len(typ.types) > 1 && document_type_at(document, typ, 1) != 0 { document_signature_write(builder, budget, " -> "); document_append_type_child(builder, budget, document, typ, 1, depth, indent) }
+		// A valid procedure type with no parameters has no parameter-tuple edge
+		// in some compiler-produced documents. That is `proc()`, not `proc_`.
+		if parameters := document_type_at(document, typ, 0); parameters != 0 {
+			document_append_type(builder, budget, document, parameters, depth + 1, indent)
+		} else {
+			document_signature_write(builder, budget, "()")
+		}
+		if result := document_type_at(document, typ, 1); result != 0 && int(result) < len(document.types) {
+			document_signature_write(builder, budget, " -> ")
+			// Procedure results are conventionally encoded as a tuple. Avoid
+			// visually inventing parentheses for its common single-result form.
+			result_type := document.types[result]
+			if result_type.kind == 13 && len(result_type.types) == 1 && len(result_type.entities) == 0 {
+				document_append_type_child(builder, budget, document, result_type, 0, depth, indent)
+			} else {
+				document_append_type(builder, budget, document, result, depth + 1, indent)
+			}
+		}
 	case 15:
 		document_signature_write(builder, budget, "bit_set["); document_append_type_child(builder, budget, document, typ, 0, depth, indent)
 		if len(typ.types) > 1 { document_signature_write(builder, budget, "; "); document_append_type_child(builder, budget, document, typ, 1, depth, indent) } else if typ.elem_count_len > 0 { document_signature_write(builder, budget, "; "); document_signature_write_int(builder, budget, int(typ.elem_counts[0])); if typ.elem_count_len > 1 { document_signature_write(builder, budget, ".."); document_signature_write_int(builder, budget, int(typ.elem_counts[1])) } }
@@ -532,6 +548,33 @@ test_document_signature_renders_documented_enum_cases :: proc(t: ^testing.T) {
 	budget := Document_Signature_Budget{remaining = DOCUMENT_SIGNATURE_MAX_BYTES}
 	document_append_type(&builder, &budget, &document, 2, 0, 0)
 	testing.expect(t, strings.to_string(builder) == "enum u8 {\n\t// No state has been selected.\n\tUnknown = 0, // The implicit default.\n\t// The system is ready.\n\tReady   = 5,\n}", "enum cases should render with aligned values, inline comments, and documentation")
+}
+
+@(test)
+test_document_signature_renders_empty_and_parameterized_procedure_types :: proc(t: ^testing.T) {
+	document := doc.Document_Init()
+	defer doc.Document_Destroy(&document)
+	append(&document.types, doc.Type{kind = 1, name = "int", types = make([dynamic]u32, 0), entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	append(&document.types, doc.Type{kind = 1, name = "rawptr", types = make([dynamic]u32, 0), entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	empty_parameters := make([dynamic]u32, 0)
+	append(&document.types, doc.Type{kind = 14, types = empty_parameters, entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	append(&document.entities, doc.Entity{kind = 2, name = "state", type = 2, attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)})
+	parameters := make([dynamic]u32, 0, 1); append(&parameters, 1)
+	append(&document.types, doc.Type{kind = 13, types = make([dynamic]u32, 0), entities = parameters, where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	results := make([dynamic]u32, 0, 1); append(&results, 1)
+	append(&document.types, doc.Type{kind = 13, types = results, entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	procedure_types := make([dynamic]u32, 0, 2); append(&procedure_types, 4); append(&procedure_types, 5)
+	append(&document.types, doc.Type{kind = 14, types = procedure_types, entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	empty_builder: strings.Builder
+	defer strings.builder_destroy(&empty_builder)
+	budget := Document_Signature_Budget{remaining = DOCUMENT_SIGNATURE_MAX_BYTES}
+	document_append_type(&empty_builder, &budget, &document, 3, 0, 0)
+	testing.expect(t, strings.to_string(empty_builder) == "proc()", "an absent parameter tuple should render as an empty procedure argument list")
+	parameterized_builder: strings.Builder
+	defer strings.builder_destroy(&parameterized_builder)
+	budget = {remaining = DOCUMENT_SIGNATURE_MAX_BYTES}
+	document_append_type(&parameterized_builder, &budget, &document, 6, 0, 0)
+	testing.expect(t, strings.to_string(parameterized_builder) == "proc(state: rawptr) -> int", "procedure field types should retain parameters and a single result without synthetic tuple punctuation")
 }
 
 @(test)

@@ -643,6 +643,16 @@ odin_token_class :: proc(kind: tokenizer.Token_Kind) -> string {
 	}
 }
 
+// Struct fields and procedure parameters use a single colon. They are local
+// labels, never references to package-level declarations with the same name.
+// Keep top-level `Name ::` declarations linkable by requiring exactly one
+// colon after optional whitespace.
+odin_identifier_is_local_label :: proc(code: string, end: int) -> bool {
+	index := end
+	for index < len(code) && (code[index] == ' ' || code[index] == '\t' || code[index] == '\r' || code[index] == '\n') do index += 1
+	return index < len(code) && code[index] == ':' && (index+1 >= len(code) || code[index+1] != ':')
+}
+
 write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render_Context) {
 	lexer: tokenizer.Tokenizer
 	tokenizer.init(&lexer, code, "", nil)
@@ -668,7 +678,7 @@ write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render
 		if is_directive do class = "tok-directive"
 		href := ""
 		linked := false
-		if token.kind == .Ident && !is_directive {
+		if token.kind == .Ident && !is_directive && !odin_identifier_is_local_label(code, end) {
 			if len(selector_alias) > 0 {
 				href, linked = site_internal_href(ctx, strings.concatenate({selector_alias, ".", text}, context.temp_allocator), false)
 			} else {
@@ -1793,6 +1803,7 @@ test_internal_links_resolve_only_local_or_imported_targets :: proc(t: ^testing.T
 	local_file := File{name = "local.odin", imports = make([dynamic]Import, 0, 1), entries = make([dynamic]Entry, 0, 1)}
 	append(&local_file.imports, Import{alias = "ui", path = "shared:ui"})
 	append(&local_file.entries, Entry{name = "Local", anchor = "local"})
+	append(&local_file.entries, Entry{name = "init", anchor = "init"})
 	append(&local.files, local_file)
 	append(&model.packages, local)
 	imported := Package{name = "ui", relative_path = "ui", files = make([dynamic]File, 0, 1)}
@@ -1822,6 +1833,10 @@ test_internal_links_resolve_only_local_or_imported_targets :: proc(t: ^testing.T
 	testing.expect(t, strings.contains(rendered, "../../ui/#element"), "qualified imported identifiers should link in highlighted code")
 	testing.expect(t, strings.contains(rendered, "href=\"#local\""), "local identifiers should link in highlighted code")
 	testing.expect(t, strings.contains(rendered, "class=\"tok-directive\">#</span><span class=\"tok-directive\">packed"), "Odin directives should retain a single directive color")
+	field_code: strings.Builder
+	defer strings.builder_destroy(&field_code)
+	write_odin_code(&field_code, "Worker :: struct { init: proc(), value: Local }", ctx)
+	testing.expect(t, !strings.contains(strings.to_string(field_code), "href=\"#init\""), "struct field labels must not link to same-named package declarations")
 }
 
 @(test)

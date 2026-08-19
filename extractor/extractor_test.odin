@@ -163,6 +163,20 @@ lower_emits_valid_document_for_supported_source_subset :: proc(t: ^testing.T) {
 }
 
 @(test)
+lower_represents_procedure_typed_fields_including_empty_argument_lists :: proc(t: ^testing.T) {
+	document := doc.Document_Init()
+	defer doc.Document_Destroy(&document)
+	empty_proc, empty_proven := add_annotation_type(&document, "proc() -> int", context.allocator)
+	with_parameters, parameters_proven := add_annotation_type(&document, "proc(state: rawptr, allocator: runtime.Allocator)", context.allocator)
+	testing.expect(t, empty_proven && empty_proc > 0 && document.types[empty_proc].kind == 14, "a no-argument procedure field should lower as a procedure type")
+	testing.expect(t, len(document.types[empty_proc].types) == 2 && document.types[empty_proc].types[0] > 0, "a no-argument procedure should still retain an empty parameter tuple and its result")
+	testing.expect(t, parameters_proven && with_parameters > 0 && document.types[with_parameters].kind == 14, "a parameterized procedure field should lower as a procedure type")
+	if with_parameters == 0 || len(document.types[with_parameters].types) == 0 do return
+	parameters := document.types[document.types[with_parameters].types[0]]
+	testing.expect(t, len(parameters.entities) == 2 && document.entities[parameters.entities[0]].name == "state" && document.entities[parameters.entities[1]].name == "allocator", "procedure field parameter names should survive source lowering")
+}
+
+@(test)
 lower_preserves_enum_cases_comments_and_values :: proc(t: ^testing.T) {
 	workspace := Extract(Config{root_path = "extractor/fixtures/enums", target_os = "linux", target_arch = "amd64"})
 	defer Destroy(&workspace)

@@ -380,6 +380,14 @@ add_bit_set_type :: proc(document: ^doc.Document, text: string, allocator: mem.A
 add_annotation_type :: proc(document: ^doc.Document, annotation: string, allocator: mem.Allocator) -> (type_index: u32, proven: bool) {
 	text := strings.trim_space(annotation)
 	if strings.has_prefix(text, "bit_set[") do return add_bit_set_type(document, text, allocator)
+	if strings.has_prefix(text, "proc") {
+		// A procedure annotation is a first-class field type, not an unresolved
+		// named `proc`. Its parameter entity names borrow this source string, so
+		// retain it with the lowered document.
+		source := strings.clone(strings.concatenate({"_ :: ", text}, context.temp_allocator), allocator)
+		append(&document._owned_strings, source)
+		return append_procedure_type(document, 0, Declaration{source = source}, allocator)
+	}
 	if strings.has_prefix(text, "^") {
 		element, element_proven := add_annotation_type(document, text[1:], allocator)
 		if element == 0 do return 0, false
@@ -429,7 +437,7 @@ add_annotation_type :: proc(document: ^doc.Document, annotation: string, allocat
 	if len(name) == 0 do return 0, false
 	// These are type constructors, not named types. Keep the explicit
 	// incomplete result until their full child syntax can be represented.
-	if name == "map" || name == "proc" do return 0, false
+	if name == "map" do return 0, false
 	kind := u32(2) // named syntax; entity binding is deferred to resolution.
 	if is_builtin_type(name) do kind = 1
 	append(&document.types, new_type(kind, name, allocator))

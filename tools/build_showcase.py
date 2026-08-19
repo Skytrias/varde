@@ -81,16 +81,16 @@ def blob_prefix(repo: Repository) -> str:
     return f"{repo.url.removesuffix('.git')}/blob/{repo.commit}"
 
 
-def build_site(varde: Path, workspace: Path, documents: list[Path], destination: Path) -> None:
-    """Varde intentionally requires output paths relative to the workspace."""
+def build_source_site(varde: Path, workspace: Path, destination: Path) -> None:
+    """Build one showcase entry exclusively through Varde source mode."""
     relative_output = ".varde-showcase"
     generated = workspace / relative_output
     if generated.exists():
         raise RuntimeError(f"refusing to replace existing generated site: {generated}")
-    command = [str(varde), "build"]
-    for document in documents:
-        command.extend(["--doc", str(document)])
-    command.extend(["--out", relative_output])
+    # The public showcase intentionally demonstrates Varde's compiler-free,
+    # incomplete source path. It must not invoke `odin doc` or depend on a
+    # project's native build prerequisites.
+    command = [str(varde), "build", "--source", ".", "--allow-incomplete", "--out", relative_output]
     run(command, cwd=workspace)
     shutil.copytree(generated, destination)
 
@@ -109,28 +109,9 @@ def configure_site(workspace: Path, name: str, repo: Repository, *, workspace_pa
     }) + "\n", encoding="utf-8")
 
 
-def compiler_document(odin: str, source: Path, artifacts: Path, name: str, extra: list[str] | None = None) -> Path:
-    base = artifacts / name
-    command = [odin, "doc", str(source), "-all-packages", "-doc-format"]
-    if extra:
-        command.extend(extra)
-    command.append(f"-out:{base}")
-    run(command)
-    return base.with_suffix(".odin-doc")
-
-
-def build_odin(varde: Path, source: Path, artifacts: Path, destination: Path) -> None:
-    # Keep this source-derived preview transparent: Varde source mode is not
-    # compiler-equivalent and therefore remains explicitly opt-in here.
+def build_odin(varde: Path, source: Path, destination: Path) -> None:
     configure_site(source, "odin", ODIN)
-    documents: list[Path] = []
-    for collection in ("base", "core", "vendor"):
-        document = artifacts / f"odin-{collection}.odin-doc"
-        run(
-            [str(varde), "extract", "--source", str(source / collection), "--out", str(document), "--allow-incomplete"]
-        )
-        documents.append(document)
-    build_site(varde, source, documents, destination)
+    build_source_site(varde, source, destination)
 
 
 def build_varde(varde: Path, workspace: Path, destination: Path, repository: Repository) -> None:
@@ -141,48 +122,27 @@ def build_varde(varde: Path, workspace: Path, destination: Path, repository: Rep
         ignore=shutil.ignore_patterns(".git", ".varde-*", "dist", "docs", "__pycache__", ".DS_Store"),
     )
     configure_site(workspace, "varde", repository)
-    relative_output = ".varde-showcase"
-    run([str(varde), "build", "--source", ".", "--allow-incomplete", "--out", relative_output], cwd=workspace)
-    shutil.copytree(workspace / relative_output, destination)
+    build_source_site(varde, workspace, destination)
 
 
-def build_karl2d(varde: Path, odin: str, source: Path, artifacts: Path, destination: Path) -> None:
+def build_karl2d(varde: Path, source: Path, destination: Path) -> None:
     configure_site(source, "karl2d", KARL2D, workspace_packages_only=True)
-    document = compiler_document(odin, source, artifacts, "karl2d")
-    build_site(varde, source, [document], destination)
+    build_source_site(varde, source, destination)
 
 
-def build_muninn(varde: Path, odin: str, source: Path, artifacts: Path, destination: Path) -> None:
+def build_muninn(varde: Path, source: Path, destination: Path) -> None:
     configure_site(source, "muninn", MUNINN, workspace_packages_only=True)
-    document = compiler_document(odin, source / "ecs", artifacts, "muninn")
-    build_site(varde, source, [document], destination)
+    build_source_site(varde, source, destination)
 
 
-def build_sokol_odin(varde: Path, odin: str, source: Path, artifacts: Path, destination: Path) -> None:
+def build_sokol_odin(varde: Path, source: Path, destination: Path) -> None:
     configure_site(source, "sokol-odin", SOKOL_ODIN, workspace_packages_only=True)
-    packages = source / "sokol"
-    documents: list[Path] = []
-    for package in sorted(packages.iterdir()):
-        if not package.is_dir() or not any(package.glob("*.odin")):
-            continue
-        documents.append(
-            compiler_document(
-                odin,
-                package,
-                artifacts,
-                f"sokol-{package.name}",
-                [f"-collection:sokol={packages}"],
-            )
-        )
-    if not documents:
-        raise RuntimeError("sokol-odin: no public binding packages found")
-    build_site(varde, source, documents, destination)
+    build_source_site(varde, source, destination)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--varde", required=True, type=Path, help="Path to the built Varde executable")
-    parser.add_argument("--odin", default="odin", help="Odin compiler command")
     parser.add_argument("--output", required=True, type=Path, help="New directory for the Pages artifact")
     args = parser.parse_args()
 
@@ -204,15 +164,13 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="varde-showcase-") as temporary:
         work = Path(temporary)
-        artifacts = work / "artifacts"
-        artifacts.mkdir()
 
         build_varde(varde, work / "varde", projects / "varde", varde_repository)
         odin_source = clone_at(ODIN, work / ODIN.slug)
-        build_odin(varde, odin_source, artifacts, projects / ODIN.slug)
-        build_karl2d(varde, args.odin, clone_at(KARL2D, work / KARL2D.slug), artifacts, projects / KARL2D.slug)
-        build_muninn(varde, args.odin, clone_at(MUNINN, work / MUNINN.slug), artifacts, projects / MUNINN.slug)
-        build_sokol_odin(varde, args.odin, clone_at(SOKOL_ODIN, work / SOKOL_ODIN.slug), artifacts, projects / SOKOL_ODIN.slug)
+        build_odin(varde, odin_source, projects / ODIN.slug)
+        build_karl2d(varde, clone_at(KARL2D, work / KARL2D.slug), projects / KARL2D.slug)
+        build_muninn(varde, clone_at(MUNINN, work / MUNINN.slug), projects / MUNINN.slug)
+        build_sokol_odin(varde, clone_at(SOKOL_ODIN, work / SOKOL_ODIN.slug), projects / SOKOL_ODIN.slug)
 
     required = [output / "index.html"] + [projects / project / "index.html" for project in ("varde", "odin", "karl2d", "muninn", "sokol-odin")]
     missing = [str(path) for path in required if not path.is_file()]
