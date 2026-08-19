@@ -10,6 +10,7 @@ import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:path/filepath"
+import "core:slice"
 import "core:strings"
 import "core:sync"
 import "core:testing"
@@ -61,6 +62,26 @@ Entry :: struct {
 	summary:   string,
 	source_path: string,
 	source_line: int,
+}
+
+// Declarations are presented in the same stable categories used by Odin's
+// package documentation. Keep an Other bucket for newer document kinds so a
+// site never silently loses a declaration just because its renderer predates
+// that kind.
+Entry_Group :: enum {
+	Types,
+	Constants,
+	Variables,
+	Procedures,
+	Procedure_Groups,
+	Other,
+}
+
+ENTRY_GROUP_ORDER :: []Entry_Group{.Types, .Constants, .Variables, .Procedures, .Procedure_Groups, .Other}
+
+Package_Entry :: struct {
+	entry: ^Entry,
+	file:  ^File,
 }
 
 source_links_validate :: proc(config: Config) -> string {
@@ -846,6 +867,121 @@ write_doc_body :: proc(builder: ^strings.Builder, text: string, ctx: Doc_Render_
 	}
 }
 
+entry_group_for_kind :: proc(kind: string) -> Entry_Group {
+	switch kind {
+	case "Types": return .Types
+	case "Constants": return .Constants
+	case "Variables": return .Variables
+	case "Procedures": return .Procedures
+	case "Procedure Groups": return .Procedure_Groups
+	case: return .Other
+	}
+}
+
+entry_group_title :: proc(group: Entry_Group) -> string {
+	switch group {
+	case .Types: return "Types"
+	case .Constants: return "Constants"
+	case .Variables: return "Variables"
+	case .Procedures: return "Procedures"
+	case .Procedure_Groups: return "Procedure Groups"
+	case .Other: return "Other Declarations"
+	}
+	return "Other Declarations"
+}
+
+entry_group_anchor :: proc(group: Entry_Group) -> string {
+	switch group {
+	case .Types: return "group-types"
+	case .Constants: return "group-constants"
+	case .Variables: return "group-variables"
+	case .Procedures: return "group-procedures"
+	case .Procedure_Groups: return "group-procedure-groups"
+	case .Other: return "group-other"
+	}
+	return "group-other"
+}
+
+package_entry_less :: proc(left, right: Package_Entry) -> bool {
+	if left.entry.name != right.entry.name do return left.entry.name < right.entry.name
+	if left.file.name != right.file.name do return left.file.name < right.file.name
+	if left.entry.source_line != right.entry.source_line do return left.entry.source_line < right.entry.source_line
+	return left.entry.anchor < right.entry.anchor
+}
+
+package_group_entries :: proc(pkg: ^Package, group: Entry_Group) -> [dynamic]Package_Entry {
+	entries := make([dynamic]Package_Entry, 0, 8)
+	for &file in pkg.files {
+		for &entry in file.entries {
+			if entry_group_for_kind(entry.kind) == group do append(&entries, Package_Entry{entry = &entry, file = &file})
+		}
+	}
+	slice.sort_by(entries[:], package_entry_less)
+	return entries
+}
+
+write_package_entry :: proc(builder: ^strings.Builder, model: ^Model, package_context: Doc_Render_Context, config: Config, item: Package_Entry) {
+	entry := item.entry
+	entry_context := package_context
+	entry_context.file = item.file
+	strings.write_string(builder, "<article class=\"symbol\" id=\"")
+	html_attr(builder, entry.anchor)
+	strings.write_string(builder, "\"><header class=\"symbol-heading\"><h3><a class=\"symbol-name\" href=\"#")
+	html_attr(builder, entry.anchor)
+	strings.write_string(builder, "\">")
+	html_text(builder, entry.name)
+	strings.write_string(builder, "</a><span class=\"kind\">")
+	html_text(builder, entry_kind_singular(entry.kind))
+	strings.write_string(builder, "</span></h3>")
+	if href, ok := source_href(config, model, entry^); ok {
+		strings.write_string(builder, "<a class=\"source-link\" href=\""); html_attr(builder, href); strings.write_string(builder, "\" rel=\"noreferrer noopener\" target=\"_blank\">Source</a>")
+	}
+	strings.write_string(builder, "</header><pre><code>")
+	write_odin_code(builder, entry.signature, entry_context)
+	strings.write_string(builder, "</code></pre>")
+	if len(entry.summary) > 0 { strings.write_string(builder, "<p class=\"summary\">"); html_text(builder, entry.summary); strings.write_string(builder, "</p>") }
+	write_doc_body(builder, entry_body(entry^), entry_context)
+	strings.write_string(builder, "</article>")
+}
+
+write_package_entry_group :: proc(builder: ^strings.Builder, model: ^Model, package_context: Doc_Render_Context, config: Config, group: Entry_Group, entries: []Package_Entry) {
+	if len(entries) == 0 do return
+	anchor := entry_group_anchor(group)
+	strings.write_string(builder, "<section class=\"entry-group\" id=\""); html_attr(builder, anchor); strings.write_string(builder, "\" aria-labelledby=\"")
+	html_attr(builder, strings.concatenate({anchor, "-heading"}, context.temp_allocator))
+	strings.write_string(builder, "\"><header class=\"entry-group-heading\"><h2 id=\"")
+	html_attr(builder, strings.concatenate({anchor, "-heading"}, context.temp_allocator))
+	strings.write_string(builder, "\">"); html_text(builder, entry_group_title(group)); strings.write_string(builder, "</h2><span class=\"entry-group-count\">")
+	write_grouped_count(builder, len(entries))
+	strings.write_string(builder, "</span></header>")
+	for item in entries do write_package_entry(builder, model, package_context, config, item)
+	strings.write_string(builder, "</section>")
+}
+
+write_package_toc_group :: proc(builder: ^strings.Builder, group: Entry_Group, entries: []Package_Entry) {
+	if len(entries) == 0 do return
+	anchor := entry_group_anchor(group)
+	strings.write_string(builder, "<section class=\"toc-group\" data-toc-group=\"")
+	html_attr(builder, anchor)
+	strings.write_string(builder, "\"><a class=\"toc-group-link\" data-toc-group-target=\"")
+	html_attr(builder, anchor)
+	strings.write_string(builder, "\" href=\"#")
+	html_attr(builder, anchor)
+	strings.write_string(builder, "\">"); html_text(builder, entry_group_title(group)); strings.write_string(builder, " <span>")
+	write_grouped_count(builder, len(entries))
+	strings.write_string(builder, "</span></a><div class=\"toc-entries\">")
+	for item in entries {
+		strings.write_string(builder, "<a class=\"toc-entry\" data-toc-target=\"")
+		html_attr(builder, item.entry.anchor)
+		strings.write_string(builder, "\" href=\"#")
+		html_attr(builder, item.entry.anchor)
+		strings.write_string(builder, "\">")
+		html_text(builder, item.entry.name)
+		strings.write_string(builder, "</a>")
+	}
+	strings.write_string(builder, "</div></section>")
+}
+
 write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^Package, config: Config, extensions: Site_Extensions, output_root: string) -> string {
 	page_relative := package_output_path(pkg^)
 	page_path := path_join({output_root, page_relative})
@@ -870,70 +1006,26 @@ write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^P
 	strings.write_string(&builder, "</h1></header>")
 	package_context := Doc_Render_Context{model = model, indexes = indexes, output_root = output_root, page_path = page_path, pkg = pkg}
 	write_doc_body(&builder, pkg.overview, package_context)
-	for &file, file_index in pkg.files {
-		file_display_name := source_path_display(model, file.name)
-		strings.write_string(&builder, "<section class=\"file\" id=\"file-")
-		fmt.sbprintf(&builder, "%d", file_index)
-		strings.write_string(&builder, "\"><header class=\"file-heading\"><h2>")
-		html_text(&builder, file_display_name)
-		strings.write_string(&builder, "</h2></header>")
-		if len(file.imports) > 0 {
-			strings.write_string(&builder, "<p class=\"imports\">Imports: ")
-			for import_entry, i in file.imports {
-				if i > 0 do strings.write_string(&builder, ", ")
-				if imported_pkg := site_package_for_import(indexes, model, pkg, import_entry.path); imported_pkg != nil {
-					target_path := path_join({output_root, package_output_path(imported_pkg^)})
-					strings.write_string(&builder, "<a href=\""); html_attr(&builder, package_href_from(page_path, target_path, "")); strings.write_string(&builder, "\">")
-					html_text(&builder, import_entry.path); strings.write_string(&builder, "</a>")
-				} else {
-					html_text(&builder, import_entry.path)
-				}
-			}
-			strings.write_string(&builder, "</p>")
-		}
-		file_context := package_context
-		file_context.file = &file
-		write_doc_body(&builder, file.overview, file_context)
-		for entry in file.entries {
-			strings.write_string(&builder, "<article class=\"symbol\" id=\"")
-			html_attr(&builder, entry.anchor)
-			strings.write_string(&builder, "\"><header class=\"symbol-heading\"><h3><a class=\"symbol-name\" href=\"#")
-			html_attr(&builder, entry.anchor)
-			strings.write_string(&builder, "\">")
-			html_text(&builder, entry.name)
-			strings.write_string(&builder, "</a><span class=\"kind\">")
-			html_text(&builder, entry_kind_singular(entry.kind))
-			strings.write_string(&builder, "</span></h3>")
-			if href, ok := source_href(config, model, entry); ok {
-				strings.write_string(&builder, "<a class=\"source-link\" href=\""); html_attr(&builder, href); strings.write_string(&builder, "\" rel=\"noreferrer noopener\" target=\"_blank\">Source</a>")
-			}
-			strings.write_string(&builder, "</header><pre><code>")
-			write_odin_code(&builder, entry.signature, file_context)
-			strings.write_string(&builder, "</code></pre>")
-			if len(entry.summary) > 0 { strings.write_string(&builder, "<p class=\"summary\">"); html_text(&builder, entry.summary); strings.write_string(&builder, "</p>") }
-			write_doc_body(&builder, entry_body(entry), file_context)
-			strings.write_string(&builder, "</article>")
-		}
-		strings.write_string(&builder, "</section>")
+	for group in ENTRY_GROUP_ORDER {
+		entries := package_group_entries(pkg, group)
+		defer delete(entries)
+		write_package_entry_group(&builder, model, package_context, config, group, entries[:])
 	}
-	strings.write_string(&builder, "</article><aside class=\"package-toc\"><nav aria-label=\"On this page\"><p class=\"toc-title\">On this page</p><a href=\"#main\">Overview</a>")
-	for &file, file_index in pkg.files {
-		file_display_name := source_path_display(model, file.name)
-		strings.write_string(&builder, "<div class=\"toc-group\"><a class=\"toc-file\" href=\"#file-")
-		fmt.sbprintf(&builder, "%d", file_index)
-		strings.write_string(&builder, "\">")
-		html_text(&builder, file_display_name)
+	strings.write_string(&builder, "</article><aside class=\"package-toc\"><nav aria-label=\"On this page\"><p class=\"toc-title\">On this page</p><a class=\"toc-overview\" href=\"#main\">Overview</a><div class=\"toc-jumps\" aria-label=\"Declaration groups\">")
+	for group in ENTRY_GROUP_ORDER {
+		entries := package_group_entries(pkg, group)
+		defer delete(entries)
+		if len(entries) == 0 do continue
+		anchor := entry_group_anchor(group)
+		strings.write_string(&builder, "<a href=\"#"); html_attr(&builder, anchor); strings.write_string(&builder, "\">")
+		html_text(&builder, entry_group_title(group))
 		strings.write_string(&builder, "</a>")
-		for entry in file.entries {
-			strings.write_string(&builder, "<a class=\"toc-entry\" data-toc-target=\"")
-			html_attr(&builder, entry.anchor)
-			strings.write_string(&builder, "\" href=\"#")
-			html_attr(&builder, entry.anchor)
-			strings.write_string(&builder, "\">")
-			html_text(&builder, entry.name)
-			strings.write_string(&builder, "</a>")
-		}
-		strings.write_string(&builder, "</div>")
+	}
+	strings.write_string(&builder, "</div>")
+	for group in ENTRY_GROUP_ORDER {
+		entries := package_group_entries(pkg, group)
+		defer delete(entries)
+		write_package_toc_group(&builder, group, entries[:])
 	}
 	strings.write_string(&builder, "</nav></aside></main>")
 	site_footer(&builder, assets_relative, extensions)
@@ -1121,8 +1213,8 @@ SITE_JS :: `
   open?.addEventListener("click",showSearch);close?.addEventListener("click",()=>dialog.close());dialog?.addEventListener("click",event=>{if(event.target===dialog)dialog.close();});input?.addEventListener("input",render);input?.addEventListener("keydown",event=>{if(event.key==="ArrowDown"&&shown.length){event.preventDefault();select((selected+1)%shown.length);}else if(event.key==="ArrowUp"&&shown.length){event.preventDefault();select((selected-1+shown.length)%shown.length);}else if(event.key==="Enter"&&selected>=0){event.preventDefault();results.querySelectorAll(".search-result")[selected]?.click();}});
   document.addEventListener("click",event=>{if(location.protocol!=="file:"||event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;const link=event.target instanceof Element?event.target.closest("a[href]"):null;if(!link||link.target||link.hasAttribute("download"))return;const destination=new URL(link.getAttribute("href"),location.href);if(destination.protocol!=="file:"||!destination.pathname.endsWith("/"))return;event.preventDefault();destination.pathname+="index.html";location.href=destination.href;});
   document.addEventListener("keydown",event=>{const editable=event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement||event.target?.isContentEditable;if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==="k"){event.preventDefault();showSearch();}else if(event.key==="/"&&!editable&&!dialog?.open){event.preventDefault();showSearch();}else if(event.key==="Escape"&&dialog?.open)dialog.close();});
-	const tocPanel=document.querySelector(".package-toc"),tocLinks=[...document.querySelectorAll(".toc-entry[data-toc-target]")],tocTargets=tocLinks.map(link=>({link,target:document.getElementById(link.dataset.tocTarget)})).filter(item=>item.target);
-	if(tocTargets.length){let scheduled=false,activeLink=null;const updateToc=()=>{scheduled=false;let active=tocTargets[0];for(const item of tocTargets){if(item.target.getBoundingClientRect().top<=132)active=item;else break;}tocTargets.forEach(item=>item.link.dataset.active=String(item===active));if(active.link!==activeLink&&tocPanel){const linkRect=active.link.getBoundingClientRect(),panelRect=tocPanel.getBoundingClientRect(),padding=14;if(linkRect.top<panelRect.top+padding)tocPanel.scrollTop+=linkRect.top-panelRect.top-padding;else if(linkRect.bottom>panelRect.bottom-padding)tocPanel.scrollTop+=linkRect.bottom-panelRect.bottom+padding;activeLink=active.link;}};const scheduleToc=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(updateToc);}};addEventListener("scroll",scheduleToc,{passive:true});addEventListener("resize",scheduleToc);scheduleToc();}
+	const tocPanel=document.querySelector(".package-toc"),tocLinks=[...document.querySelectorAll(".toc-entry[data-toc-target]")],tocTargets=tocLinks.map(link=>({link,target:document.getElementById(link.dataset.tocTarget)})).filter(item=>item.target),tocGroups=[...document.querySelectorAll(".toc-group")];
+	if(tocTargets.length){let scheduled=false,activeLink=null;const updateToc=()=>{scheduled=false;let active=tocTargets[0];for(const item of tocTargets){if(item.target.getBoundingClientRect().top<=132)active=item;else break;}tocTargets.forEach(item=>item.link.dataset.active=String(item===active));const activeGroup=active.link.closest(".toc-group");tocGroups.forEach(group=>{const isActive=group===activeGroup;group.dataset.active=String(isActive);const link=group.querySelector(".toc-group-link");if(link)link.dataset.active=String(isActive);});if(active.link!==activeLink&&tocPanel){const linkRect=active.link.getBoundingClientRect(),panelRect=tocPanel.getBoundingClientRect(),padding=14;if(linkRect.top<panelRect.top+padding)tocPanel.scrollTop+=linkRect.top-panelRect.top-padding;else if(linkRect.bottom>panelRect.bottom-padding)tocPanel.scrollTop+=linkRect.bottom-panelRect.bottom+padding;activeLink=active.link;}};const scheduleToc=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(updateToc);}};addEventListener("scroll",scheduleToc,{passive:true});addEventListener("resize",scheduleToc);scheduleToc();}
 })();
 `
 
@@ -1178,7 +1270,8 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 	css_builder: strings.Builder
 	defer strings.builder_destroy(&css_builder)
 	strings.write_string(&css_builder, SITE_CSS)
-	strings.write_string(&css_builder, ".source-link{margin-left:auto;color:var(--muted);font-size:.78rem;font-weight:650;text-decoration:none}.source-link:hover{color:var(--accent);text-decoration:underline}.toc-entry[data-active=\"true\"]{color:var(--accent);font-weight:700;border-left:2px solid var(--accent);margin-left:-19px;padding-left:26px}.tok-keyword{color:#b23b7d;font-weight:650}.tok-literal{color:#9c5b16}.tok-operator{color:#62756a}.tok-comment{color:var(--muted);font-style:italic}.tok-directive{color:#6b56bb}.tok-invalid{color:#c43d3d;text-decoration:underline}.tok-link{color:#2776c4;text-decoration:none;font-weight:650}.tok-link:hover{text-decoration:underline}:root[data-theme=\"dark\"] .tok-keyword{color:#f08bb8}:root[data-theme=\"dark\"] .tok-literal{color:#f0ba6a}:root[data-theme=\"dark\"] .tok-operator{color:#b6c8ba}:root[data-theme=\"dark\"] .tok-directive{color:#c3b2ff}:root[data-theme=\"dark\"] .tok-link{color:#8ec5ff}\n")
+	strings.write_string(&css_builder, "/* Package declarations are grouped by their public kind, then alphabetized. The index repeats that structure so it supports both quick group jumps and precise symbol navigation. */\n.entry-group{margin:30px 0 0;scroll-margin-top:88px}.entry-group-heading{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:0 0 9px;border-bottom:1px solid var(--line)}.entry-group-heading h2{margin:0;font-size:1.22rem;letter-spacing:-.02em}.entry-group-count{color:var(--muted);font-size:.78rem;font-weight:700;font-variant-numeric:tabular-nums}.entry-group .symbol:first-of-type{padding-top:17px}.toc-jumps{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 14px}.toc-jumps a{padding:3px 6px!important;border:1px solid var(--line);border-radius:999px;background:var(--surface-raised);font-size:.72rem;line-height:1.25}.toc-group{padding:8px 0 0;border-top:1px solid color-mix(in srgb,var(--line) 72%,transparent)}.toc-group-link{display:flex!important;align-items:baseline;justify-content:space-between;gap:8px;color:var(--text)!important;font-size:.77rem;font-weight:750}.toc-group-link span{color:var(--muted);font-size:.7rem;font-variant-numeric:tabular-nums}.toc-group-link[data-active=\"true\"]{color:var(--accent)!important}.toc-group[data-active=\"true\"]{border-color:color-mix(in srgb,var(--accent) 58%,var(--line))}.toc-entries{margin-top:3px}.toc-group .toc-entry{padding:2px 0 2px 9px}.toc-entry[data-active=\"true\"]{color:var(--accent);font-weight:700;border-left:2px solid var(--accent);margin-left:-19px;padding-left:26px}.toc-entry[data-active=\"true\"]:not(:focus-visible){background:color-mix(in srgb,var(--accent) 8%,transparent)}\n")
+	strings.write_string(&css_builder, ".source-link{margin-left:auto;color:var(--muted);font-size:.78rem;font-weight:650;text-decoration:none}.source-link:hover{color:var(--accent);text-decoration:underline}.tok-keyword{color:#b23b7d;font-weight:650}.tok-literal{color:#9c5b16}.tok-operator{color:#62756a}.tok-comment{color:var(--muted);font-style:italic}.tok-directive{color:#6b56bb}.tok-invalid{color:#c43d3d;text-decoration:underline}.tok-link{color:#2776c4;text-decoration:none;font-weight:650}.tok-link:hover{text-decoration:underline}:root[data-theme=\"dark\"] .tok-keyword{color:#f08bb8}:root[data-theme=\"dark\"] .tok-literal{color:#f0ba6a}:root[data-theme=\"dark\"] .tok-operator{color:#b6c8ba}:root[data-theme=\"dark\"] .tok-directive{color:#c3b2ff}:root[data-theme=\"dark\"] .tok-link{color:#8ec5ff}\n")
 	strings.write_string(&css_builder, ".reference-layout{width:100%;max-width:none!important;grid-template-columns:minmax(220px,1fr) minmax(0,960px) minmax(200px,1fr)!important;column-gap:clamp(28px,3vw,56px);align-items:start;padding:32px clamp(24px,4vw,72px) 96px}.reference-layout .reference{width:100%;max-width:960px;justify-self:center}.package-explorer{position:sticky;top:92px;justify-self:start;width:min(100%,260px);max-height:calc(100vh - 112px);overflow:auto;padding-right:16px;border-right:1px solid var(--line);font-size:.84rem;line-height:1.32}.package-toc{justify-self:end;width:min(100%,240px)}.explorer-title{margin:0 0 8px;font-weight:750;color:var(--text)}.package-tree,.package-tree ul{list-style:none;margin:0;padding:0}.package-tree ul{margin:2px 0 2px 7px;padding-left:12px;border-left:1px solid color-mix(in srgb,var(--line) 85%,transparent)}.package-tree li{margin:1px 0}.tree-package,.tree-folder{display:block;min-width:0;padding:5px 7px;border-radius:5px}.tree-package{color:var(--text);text-decoration:none}.tree-package:hover,.tree-package:focus-visible{background:var(--surface-raised);color:var(--accent);outline:0}.tree-package.is-active{background:color-mix(in srgb,var(--accent) 12%,var(--surface));color:var(--accent);font-weight:700}.tree-folder{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.79rem}.tree-name,.tree-meta{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tree-meta{margin-top:1px;color:var(--muted);font-size:.75rem;font-weight:400}.home-insights{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:34px 0}.home-insights article{padding:16px 17px;background:var(--surface);border:1px solid var(--line);border-radius:8px}.home-insights h2{margin:2px 0 5px;font-size:1rem;letter-spacing:-.015em}.home-insights p:last-child{margin:0;color:var(--muted);font-size:.87rem;line-height:1.45}.home .package-tree{padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:8px}.home .package-tree .tree-package{padding:8px 10px}.home .package-tree .tree-package:hover{background:var(--surface-raised)}.symbol h3 .kind{display:inline-block;vertical-align:middle;margin:0 0 0 9px;padding:2px 7px;border:1px solid var(--line);border-radius:999px;background:var(--surface-raised);font-size:.66rem;line-height:1.25;letter-spacing:.06em}.reference-layout+footer{max-width:none;padding-left:clamp(24px,4vw,72px);padding-right:clamp(24px,4vw,72px)}@media(max-width:1320px){.reference-layout{grid-template-columns:minmax(0,960px) 218px!important;justify-content:center}.package-explorer{display:none}}@media(max-width:980px){.reference-layout{display:block!important;max-width:980px!important}.package-toc{display:none}}@media(max-width:760px){.home-insights{grid-template-columns:1fr}.home-insights article{padding:14px}}@media(max-width:620px){.source-link{margin:5px 0 0;display:inline-block}.symbol h3 .kind{margin:5px 0 0;vertical-align:baseline}}\n")
 	strings.write_string(&css_builder, "/* The reference canvas stays fluid: side rails occupy the edges while the documentation expands through the center. The homepage retains a focused reading width. */\nmain.home{width:100%;max-width:1080px;padding:52px clamp(24px,4vw,72px) 96px}.home .hero,.home .metrics{max-width:960px;margin-left:auto;margin-right:auto}.home .package-directory{width:100%;max-width:none}.reference-layout{grid-template-columns:minmax(190px,250px) minmax(0,1fr) minmax(190px,250px)!important;column-gap:clamp(24px,3vw,48px)}.reference-layout .reference{max-width:none}.package-explorer,.package-toc{display:block;width:100%}@media(max-width:1120px){.reference-layout{grid-template-columns:minmax(0,1fr) 218px!important;justify-content:center}.package-explorer{display:none}}\n")
 	strings.write_string(&css_builder, "/* Search is a fixed reference tool: header and query controls stay in view while only results scroll. */\ndialog{width:min(820px,94vw);max-height:86vh;overflow:hidden}.search-dialog{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;max-height:min(760px,86vh);padding:0;overflow:hidden;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:0 28px 80px color-mix(in srgb,#000 34%,transparent)}.search-dialog-header{padding:20px 24px 14px;border-bottom:1px solid var(--line);align-items:center}.search-dialog-header h2{font-size:1.35rem}.search-dialog-header button{border-color:transparent;background:transparent;color:var(--muted)}.search-dialog-header button:hover{color:var(--text);background:var(--surface-raised);border-color:var(--line)}.search-controls{padding:14px 24px 9px;border-bottom:1px solid var(--line)}.search-dialog input{margin:0;padding:12px 14px;border-radius:7px;background:var(--bg)}.search-summary{min-height:1.35em;margin:7px 1px 0;font-size:.8rem}.search-results-scroll{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:7px 10px 10px}.search-result{grid-template-columns:minmax(0,1fr) auto;column-gap:10px;align-items:center;padding:10px 12px;border-radius:7px}.search-result strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.95rem}.search-kind{grid-column:2;grid-row:1;align-self:center;padding:2px 7px;border:1px solid var(--line);border-radius:999px;background:var(--surface-raised);color:var(--muted);font-size:.66rem;font-weight:750;letter-spacing:.055em;line-height:1.35;text-transform:uppercase}.search-result small{grid-column:1 / -1;margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.75rem;line-height:1.35}.search-hint{max-width:none;display:flex;gap:14px;margin:0;padding:11px 24px;border-top:1px solid var(--line);font-size:.76rem}.search-hint span{display:inline-flex;align-items:center;gap:3px}@media(max-width:620px){dialog{width:calc(100vw - 20px);max-height:calc(100vh - 20px)}.search-dialog{max-height:calc(100vh - 20px)}.search-dialog-header{padding:16px 18px 12px}.search-controls{padding:12px 18px 8px}.search-hint{gap:9px;padding:10px 18px;font-size:.71rem}.search-result{grid-template-columns:minmax(0,1fr) auto}.search-kind{display:block}.search-result small{grid-column:1 / -1}}\n")
@@ -1384,6 +1477,7 @@ test_search_dialog_keeps_controls_outside_result_scroller :: proc(t: ^testing.T)
 	testing.expect(t, strings.contains(SITE_JS, "performance.now()"), "search status should report measured search time")
 	testing.expect(t, strings.contains(SITE_JS, "row.append(label,kind,context)"), "search result kind tags should follow the declaration name")
 	testing.expect(t, strings.contains(SITE_JS, "destination.pathname+=\"index.html\""), "offline directory routes should resolve to their concrete entry documents")
+	testing.expect(t, strings.contains(SITE_JS, "tocGroups") && strings.contains(SITE_JS, "toc-group-link"), "the scroll spy should expose the active declaration group as well as the active symbol")
 }
 
 @(test)
@@ -1503,13 +1597,18 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	root, err := os.make_directory_temp("", "vigil-site-export-*", context.temp_allocator)
 	testing.expect(t, err == nil, "temporary output root should be created")
 	defer _ = os.remove_all(root)
-	model := Model{workspace_path = root, stats = {package_count = 1, file_count = 1, entry_count = 1, sloc = 12}}
+	model := Model{workspace_path = root, stats = {package_count = 1, file_count = 1, entry_count = 6, sloc = 12}}
 	model.packages = make([dynamic]Package, 0, 1)
 	pkg := Package{name = "core:demo", relative_path = "core/demo", summary = "A <useful> package."}
 	pkg.files = make([dynamic]File, 0, 1)
 	file := File{name = path_join({root, "demo.odin"})}
-	file.entries = make([dynamic]Entry, 0, 1)
+	file.entries = make([dynamic]Entry, 0, 6)
 	append(&file.entries, Entry{name = "hello", anchor = "hello", kind = "Procedures", signature = "hello :: proc()", docs = "Says hello.\n\n| name | meaning |\n| --- | --- |\n| hello | world |", source_path = path_join({root, "demo.odin"}), source_line = 7})
+	append(&file.entries, Entry{name = "Zebra", anchor = "Zebra", kind = "Types", signature = "Zebra :: struct {}"})
+	append(&file.entries, Entry{name = "Alpha", anchor = "Alpha", kind = "Types", signature = "Alpha :: enum {}"})
+	append(&file.entries, Entry{name = "beta", anchor = "beta", kind = "Constants", signature = "beta :: 2"})
+	append(&file.entries, Entry{name = "state", anchor = "state", kind = "Variables", signature = "state: int"})
+	append(&file.entries, Entry{name = "Handlers", anchor = "Handlers", kind = "Procedure Groups", signature = "Handlers :: proc{}"})
 	append(&pkg.files, file)
 	append(&model.packages, pkg)
 	defer {
@@ -1570,7 +1669,12 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "data-site-root=\"../../../\""), "package documents should provide a root-relative search base")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "../../../assets/overrides.css"), "every page should load the optional override stylesheet after base styles")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"package-toc\""), "package pages should include a compact on-page index")
-	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), ">demo.odin<"), "file headings and scrollspy should display workspace-relative source paths")
+	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "id=\"group-types\"") && strings.contains(string(page_data), "id=\"group-procedure-groups\""), "package pages should group declarations by kind")
+	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"toc-group\" data-toc-group=\"group-types\"") && strings.contains(string(page_data), "class=\"toc-jumps\""), "the on-page index should offer grouped quick jumps")
+	alpha_index := strings.index(string(page_data), "id=\"Alpha\"")
+	zebra_index := strings.index(string(page_data), "id=\"Zebra\"")
+	constants_index := strings.index(string(page_data), "id=\"group-constants\"")
+	testing.expect(t, page_read_err == nil && alpha_index >= 0 && zebra_index > alpha_index && constants_index > zebra_index, "each declaration group should be alphabetized and keep the package kind order")
 	testing.expect(t, page_read_err == nil && !strings.contains(string(page_data), root), "package pages should not expose absolute workspace paths")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "<table class=\"doc-table\">"), "documentation tables should render as semantic HTML tables")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"symbol-heading\""), "package pages should use compact declaration headings")
