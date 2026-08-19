@@ -6,8 +6,9 @@ PREVIEW_PORT ?= 1314
 PREVIEW_BIND ?= 127.0.0.1
 PREVIEW_PYTHON ?= python3
 PREVIEW_WATCH_INTERVAL ?= 0.75
+SHOWCASE_PREVIEW_OUT ?=
 
-.PHONY: test inspect scan extract-source build-cli build-inspector build-doc preview-build preview preview-watch sample-odin-stdlib
+.PHONY: test inspect scan extract-source build-cli build-inspector build-doc preview-build preview preview-watch showcase-preview sample-odin-stdlib
 
 test:
 	$(ODIN_BIN) test runtime
@@ -46,6 +47,16 @@ preview: preview-build
 
 preview-watch:
 	$(PREVIEW_PYTHON) tools/preview.py --make "$(MAKE)" --source "$(or $(SOURCE),.)" --out "$(PREVIEW_OUT)" --port "$(PREVIEW_PORT)" --bind "$(PREVIEW_BIND)" --interval "$(PREVIEW_WATCH_INTERVAL)" --odin-bin "$(ODIN_BIN)" --odin-build-flags="$(ODIN_BUILD_FLAGS)"
+
+# Build the pinned multi-project catalog through Varde source mode, then serve
+# it locally. A timestamped output prevents a preview command from replacing
+# another generated showcase; set SHOWCASE_PREVIEW_OUT to retain a known path.
+showcase-preview: build-cli
+	@showcase_out="$(SHOWCASE_PREVIEW_OUT)"; \
+	if [ -z "$$showcase_out" ]; then showcase_out=".varde-preview/showcase-$$(date +%s)"; fi; \
+	$(PREVIEW_PYTHON) tools/build_showcase.py --varde "$(CURDIR)/dist/varde" --output "$$showcase_out" && \
+	echo "Serving Varde showcase from $$showcase_out at http://$(PREVIEW_BIND):$(PREVIEW_PORT)" && \
+	$(PREVIEW_PYTHON) -m http.server "$(PREVIEW_PORT)" --bind "$(PREVIEW_BIND)" -d "$$showcase_out"
 
 sample-odin-stdlib: build-cli
 	@test -n "$(ODIN_ROOT)" || (echo "Usage: make sample-odin-stdlib ODIN_ROOT=/path/to/Odin [OUT=dist/varde-stdlib]"; exit 2)

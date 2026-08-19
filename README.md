@@ -101,6 +101,19 @@ make preview
 make preview PREVIEW_PORT=8787
 ```
 
+`preview` builds and serves documentation for the current local workspace.
+
+To build and serve the pinned multi-project Varde showcase instead, use:
+
+```sh
+make showcase-preview PREVIEW_PORT=8787
+```
+
+It fetches the showcase repositories, builds each through Varde's incomplete
+source mode, and creates a timestamped ignored output directory under
+`.varde-preview/`. Set `SHOWCASE_PREVIEW_OUT` to retain a specific output
+path; the target refuses to overwrite an existing directory.
+
 To rebuild after source changes, use the standard-library Python watcher:
 
 ```sh
