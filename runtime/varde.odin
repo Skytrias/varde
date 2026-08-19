@@ -21,7 +21,12 @@ SITE_LEGACY_CONFIG_FILE_NAME :: "vigil-site.json"
 SITE_MANIFEST_FILE_NAME :: "varde-site-manifest.json"
 SITE_LEGACY_MANIFEST_FILE_NAME :: "vigil-site-manifest.json"
 SITE_OVERRIDES_CSS_FILE_NAME :: "overrides.css"
-SITE_SCHEMA_VERSION :: 4
+SITE_SCHEMA_VERSION :: 5
+
+THEME_ODIN_LIGHT :: "odin-light"
+THEME_MONOKAI :: "monokai"
+THEME_GITHUB_LIGHT :: "github-light"
+THEME_TOKYO_NIGHT :: "tokyo-night"
 
 SITE_OVERRIDES_CSS :: `/*
  * Varde loads this stylesheet after assets/site.css on every generated page.
@@ -42,6 +47,8 @@ Config :: struct {
 	include_source_links:  bool   `json:"include_source_links"`,
 	source_url_prefix:     string `json:"source_url_prefix"`,
 	theme:                 string `json:"theme"`,
+	system_light_theme:    string `json:"system_light_theme"`,
+	system_dark_theme:     string `json:"system_dark_theme"`,
 	motion:                string `json:"motion"`,
 	code_tab_width:        int    `json:"code_tab_width"`,
 	collapse_package_tree: bool   `json:"collapse_package_tree"`,
@@ -155,13 +162,25 @@ config_default :: proc(workspace_path, title, description: string) -> Config {
 		include_brand_artwork = true,
 		include_source_links = false,
 		theme = "system",
+		system_light_theme = THEME_ODIN_LIGHT,
+		system_dark_theme = THEME_MONOKAI,
 		motion = "system",
 		code_tab_width = 4,
 		collapse_package_tree = true,
 	}
 }
 
-config_theme_valid :: proc(value: string) -> bool { return value == "system" || value == "light" || value == "dark" }
+site_theme_valid :: proc(value: string) -> bool {
+	return value == THEME_ODIN_LIGHT || value == THEME_MONOKAI || value == THEME_GITHUB_LIGHT || value == THEME_TOKYO_NIGHT
+}
+
+site_theme_is_dark :: proc(value: string) -> bool { return value == THEME_MONOKAI || value == THEME_TOKYO_NIGHT }
+config_theme_valid :: proc(value: string) -> bool { return value == "system" || site_theme_valid(value) }
+config_theme_upgrade_legacy :: proc(value: string) -> string {
+	if value == "light" do return THEME_ODIN_LIGHT
+	if value == "dark" do return THEME_MONOKAI
+	return value
+}
 config_motion_valid :: proc(value: string) -> bool { return value == "system" || value == "full" || value == "reduced" }
 config_tab_width_valid :: proc(value: int) -> bool { return value == 2 || value == 4 || value == 8 }
 
@@ -206,9 +225,32 @@ config_load :: proc(workspace_path, title, description: string, allocator := con
 	if len(strings.trim_space(config.title)) == 0 do config.title = strings.clone(defaults.title, allocator)
 	if len(strings.trim_space(config.description)) == 0 && len(defaults.description) > 0 do config.description = strings.clone(defaults.description, allocator)
 	if len(strings.trim_space(config.output_dir)) == 0 do config.output_dir = strings.clone(defaults.output_dir, allocator)
+	legacy_theme := config_theme_upgrade_legacy(config.theme)
+	if legacy_theme != config.theme {
+		if len(config.theme) > 0 do delete(config.theme, allocator)
+		config.theme = strings.clone(legacy_theme, allocator)
+	}
 	if !config_theme_valid(config.theme) {
 		if len(config.theme) > 0 do delete(config.theme, allocator)
 		config.theme = strings.clone(defaults.theme, allocator)
+	}
+	legacy_system_light_theme := config_theme_upgrade_legacy(config.system_light_theme)
+	if legacy_system_light_theme != config.system_light_theme {
+		if len(config.system_light_theme) > 0 do delete(config.system_light_theme, allocator)
+		config.system_light_theme = strings.clone(legacy_system_light_theme, allocator)
+	}
+	if !site_theme_valid(config.system_light_theme) {
+		if len(config.system_light_theme) > 0 do delete(config.system_light_theme, allocator)
+		config.system_light_theme = strings.clone(defaults.system_light_theme, allocator)
+	}
+	legacy_system_dark_theme := config_theme_upgrade_legacy(config.system_dark_theme)
+	if legacy_system_dark_theme != config.system_dark_theme {
+		if len(config.system_dark_theme) > 0 do delete(config.system_dark_theme, allocator)
+		config.system_dark_theme = strings.clone(legacy_system_dark_theme, allocator)
+	}
+	if !site_theme_valid(config.system_dark_theme) {
+		if len(config.system_dark_theme) > 0 do delete(config.system_dark_theme, allocator)
+		config.system_dark_theme = strings.clone(defaults.system_dark_theme, allocator)
 	}
 	if !config_motion_valid(config.motion) {
 		if len(config.motion) > 0 do delete(config.motion, allocator)
@@ -232,6 +274,8 @@ config_destroy :: proc(config: ^Config, allocator: mem.Allocator = context.alloc
 	if len(config.output_dir) > 0 do delete(config.output_dir, allocator)
 	if len(config.source_url_prefix) > 0 do delete(config.source_url_prefix, allocator)
 	if len(config.theme) > 0 do delete(config.theme, allocator)
+	if len(config.system_light_theme) > 0 do delete(config.system_light_theme, allocator)
+	if len(config.system_dark_theme) > 0 do delete(config.system_dark_theme, allocator)
 	if len(config.motion) > 0 do delete(config.motion, allocator)
 	if len(config.head_html) > 0 do delete(config.head_html, allocator)
 	if len(config.before_content_html) > 0 do delete(config.before_content_html, allocator)
@@ -452,7 +496,9 @@ site_head :: proc(builder: ^strings.Builder, page_title, project_title, relative
 	strings.write_string(builder, "<!doctype html><html lang=\"en\" data-site-root=\"")
 	html_attr(builder, site_root)
 	strings.write_string(builder, "\" data-default-theme=\""); html_attr(builder, config.theme)
-	if config.theme == "light" || config.theme == "dark" {
+	strings.write_string(builder, "\" data-system-light-theme=\""); html_attr(builder, config.system_light_theme)
+	strings.write_string(builder, "\" data-system-dark-theme=\""); html_attr(builder, config.system_dark_theme)
+	if config.theme != "system" {
 		strings.write_string(builder, "\" data-theme=\"")
 		html_attr(builder, config.theme)
 	}
@@ -460,8 +506,8 @@ site_head :: proc(builder: ^strings.Builder, page_title, project_title, relative
 	strings.write_string(builder, "\" data-default-tab-width=\""); fmt.sbprintf(builder, "%d", config.code_tab_width)
 	strings.write_string(builder, "\" data-default-collapse-packages=\""); strings.write_string(builder, config.collapse_package_tree ? "true" : "false")
 	strings.write_string(builder, "\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"color-scheme\" content=\"")
-	if config.theme == "light" || config.theme == "dark" {
-		html_attr(builder, config.theme)
+	if config.theme != "system" {
+		strings.write_string(builder, site_theme_is_dark(config.theme) ? "dark" : "light")
 	} else {
 		strings.write_string(builder, "light dark")
 	}
@@ -483,12 +529,12 @@ site_head :: proc(builder: ^strings.Builder, page_title, project_title, relative
 	html_attr(builder, site_root)
 	strings.write_string(builder, "\">")
 	html_text(builder, project_title)
-	strings.write_string(builder, "</a><button id=\"site-search\" type=\"button\" aria-haspopup=\"dialog\" aria-controls=\"search-dialog\">Search <kbd>⌘K</kbd></button><button id=\"theme-toggle\" type=\"button\" aria-label=\"Toggle color theme\" aria-pressed=\"false\">Theme</button><button id=\"site-settings\" type=\"button\" aria-haspopup=\"dialog\" aria-controls=\"settings-dialog\" aria-label=\"Documentation settings\">Settings</button></header>")
+	strings.write_string(builder, "</a><button id=\"site-search\" class=\"search-trigger\" type=\"button\" aria-haspopup=\"dialog\" aria-controls=\"search-dialog\" aria-label=\"Search documentation\"><span class=\"search-trigger-icon\" aria-hidden=\"true\">⌕</span><span>Search</span><kbd>⌘K</kbd></button><button id=\"site-settings\" type=\"button\" aria-haspopup=\"dialog\" aria-controls=\"settings-dialog\" aria-label=\"Documentation settings\">Settings</button></header>")
 }
 
 site_footer :: proc(builder: ^strings.Builder, relative_assets: string, extensions: Site_Extensions) {
 	if len(extensions.after_content) > 0 do strings.write_string(builder, string(extensions.after_content[:]))
-	strings.write_string(builder, "<footer>Generated by Varde</footer><dialog id=\"search-dialog\" aria-labelledby=\"search-title\"><section class=\"search-dialog\"><header class=\"search-dialog-header\"><div><p class=\"eyebrow\">Reference search</p><h2 id=\"search-title\">Find anything</h2></div><button id=\"search-close\" type=\"button\" aria-label=\"Close search\">×</button></header><div class=\"search-controls\"><label class=\"sr-only\" for=\"search-input\">Search packages, files, and symbols</label><input id=\"search-input\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"Search packages, files, and symbols\" aria-describedby=\"search-summary\" aria-controls=\"search-results\"><p id=\"search-summary\" class=\"search-summary\" role=\"status\"></p></div><div class=\"search-results-scroll\"><div id=\"search-results\" role=\"listbox\" aria-label=\"Search results\"></div></div><footer class=\"search-hint\"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>Esc</kbd> close</span></footer></section></dialog><dialog id=\"settings-dialog\" aria-labelledby=\"settings-title\"><section class=\"settings-dialog\"><header class=\"search-dialog-header\"><div><p class=\"eyebrow\">Documentation preferences</p><h2 id=\"settings-title\">Settings</h2></div><button id=\"settings-close\" type=\"button\" aria-label=\"Close settings\">×</button></header><form id=\"settings-form\" class=\"settings-form\"><label>Theme<select name=\"theme\"><option value=\"system\">System</option><option value=\"light\">Light</option><option value=\"dark\">Dark</option></select></label><label>Motion<select name=\"motion\"><option value=\"system\">System preference</option><option value=\"full\">Full motion</option><option value=\"reduced\">Reduced motion</option></select></label><label>Code tab width<select name=\"tabWidth\"><option value=\"2\">2 spaces</option><option value=\"4\">4 spaces</option><option value=\"8\">8 spaces</option></select></label><label class=\"settings-check\"><input name=\"collapsePackages\" type=\"checkbox\"> Collapse package groups on home</label><button type=\"button\" id=\"settings-reset\">Reset to project defaults</button></form></section></dialog><script src=\"")
+	strings.write_string(builder, "<footer>Generated by Varde</footer><dialog id=\"search-dialog\" aria-labelledby=\"search-title\"><section class=\"search-dialog\"><header class=\"search-dialog-header\"><div><p class=\"eyebrow\">Reference search</p><h2 id=\"search-title\">Find anything</h2></div><button id=\"search-close\" type=\"button\" aria-label=\"Close search\">×</button></header><div class=\"search-controls\"><label class=\"sr-only\" for=\"search-input\">Search packages, files, and symbols</label><input id=\"search-input\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"Search packages, files, and symbols\" aria-describedby=\"search-summary\" aria-controls=\"search-results\"><p id=\"search-summary\" class=\"search-summary\" role=\"status\"></p></div><div class=\"search-results-scroll\"><div id=\"search-results\" role=\"listbox\" aria-label=\"Search results\"></div></div><footer class=\"search-hint\"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>Esc</kbd> close</span></footer></section></dialog><dialog id=\"settings-dialog\" aria-labelledby=\"settings-title\"><section class=\"settings-dialog\"><header class=\"search-dialog-header\"><div><p class=\"eyebrow\">Documentation preferences</p><h2 id=\"settings-title\">Settings</h2></div><button id=\"settings-close\" type=\"button\" aria-label=\"Close settings\">×</button></header><form id=\"settings-form\" class=\"settings-form\"><label>Theme<select name=\"theme\"><option value=\"system\">System</option><option value=\"odin-light\">Odin Light</option><option value=\"monokai\">Monokai</option><option value=\"github-light\">GitHub Light</option><option value=\"tokyo-night\">Tokyo Night</option></select></label><fieldset class=\"system-theme-options\"><legend>System theme variants</legend><p>Used only while Theme is set to System.</p><label>Light appearance<select name=\"systemLightTheme\"><option value=\"odin-light\">Odin Light</option><option value=\"github-light\">GitHub Light</option><option value=\"monokai\">Monokai</option><option value=\"tokyo-night\">Tokyo Night</option></select></label><label>Dark appearance<select name=\"systemDarkTheme\"><option value=\"monokai\">Monokai</option><option value=\"tokyo-night\">Tokyo Night</option><option value=\"odin-light\">Odin Light</option><option value=\"github-light\">GitHub Light</option></select></label></fieldset><label>Motion<select name=\"motion\"><option value=\"system\">System preference</option><option value=\"full\">Full motion</option><option value=\"reduced\">Reduced motion</option></select></label><label>Code tab width<select name=\"tabWidth\"><option value=\"2\">2 spaces</option><option value=\"4\">4 spaces</option><option value=\"8\">8 spaces</option></select></label><label class=\"settings-check\"><input name=\"collapsePackages\" type=\"checkbox\"> Collapse package groups on home</label><button type=\"button\" id=\"settings-reset\">Reset to project defaults</button></form></section></dialog><script src=\"")
 	html_attr(builder, strings.concatenate({relative_assets, "search-index.js"}, context.temp_allocator))
 	strings.write_string(builder, "\"></script><script src=\"")
 	html_attr(builder, strings.concatenate({relative_assets, "site.js"}, context.temp_allocator))
@@ -1291,10 +1337,10 @@ write_index_page :: proc(model: ^Model, config: Config, extensions: Site_Extensi
 	return write_text_file(page_path, &builder)
 }
 
-// This runs before the stylesheet is requested. It makes a saved theme (and
-// the configured default for dark projects) visible for the first paint rather
-// than briefly painting every new document with the light palette.
-SITE_THEME_BOOTSTRAP_JS :: `(()=>{const r=document.documentElement,d=r.dataset,k="varde-settings",validTheme=v=>v==="light"||v==="dark"||v==="system",validMotion=v=>v==="system"||v==="full"||v==="reduced",validTab=v=>v==="2"||v==="4"||v==="8";let raw="";try{raw=localStorage.getItem(k)||""}catch(_){}if(!raw)try{const bag=window.name?JSON.parse(window.name):{};raw=typeof bag.__varde_settings_v1__==="string"?bag.__varde_settings_v1__:""}catch(_){}let saved={};try{saved=JSON.parse(raw||"{}")||{}}catch(_){}const theme=validTheme(saved.theme)?saved.theme:d.defaultTheme||"system",motion=validMotion(saved.motion)?saved.motion:d.defaultMotion||"system",tab=validTab(String(saved.tabWidth))?String(saved.tabWidth):d.defaultTabWidth||"4",resolved=theme==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):theme;if(theme==="light"||theme==="dark")d.theme=theme;else delete d.theme;d.motion=motion;r.style.colorScheme=theme==="system"?"light dark":theme;r.style.backgroundColor=resolved==="dark"?"#101511":"#f6f7f4";r.style.color=resolved==="dark"?"#e7eee8":"#1b231d";r.style.setProperty("--code-tab-width",tab)})();`
+// This runs before the stylesheet is requested. It applies a persisted preset
+// (including the reader's system-light/system-dark choices) before a page can
+// flash with the wrong palette.
+SITE_THEME_BOOTSTRAP_JS :: `(()=>{const r=document.documentElement,d=r.dataset,k="varde-settings",presets=["odin-light","monokai","github-light","tokyo-night"],dark=new Set(["monokai","tokyo-night"]),normalize=v=>v==="light"?"odin-light":v==="dark"?"monokai":v,validPreset=v=>presets.includes(normalize(v)),validTheme=v=>v==="system"||validPreset(v),validMotion=v=>v==="system"||v==="full"||v==="reduced",validTab=v=>v==="2"||v==="4"||v==="8",palette={"odin-light":["#f7f9ff","#14213d"],monokai:["#272822","#f8f8f2"],"github-light":["#ffffff","#1f2328"],"tokyo-night":["#1a1b26","#c0caf5"]};let raw="";try{raw=localStorage.getItem(k)||""}catch(_){}if(!raw)try{const bag=window.name?JSON.parse(window.name):{};raw=typeof bag.__varde_settings_v1__==="string"?bag.__varde_settings_v1__:""}catch(_){}let saved={};try{saved=JSON.parse(raw||"{}")||{}}catch(_){}const theme=validTheme(saved.theme)?normalize(saved.theme):normalize(d.defaultTheme)||"system",systemLight=validPreset(saved.systemLightTheme)?normalize(saved.systemLightTheme):normalize(d.systemLightTheme)||"odin-light",systemDark=validPreset(saved.systemDarkTheme)?normalize(saved.systemDarkTheme):normalize(d.systemDarkTheme)||"monokai",motion=validMotion(saved.motion)?saved.motion:d.defaultMotion||"system",tab=validTab(String(saved.tabWidth))?String(saved.tabWidth):d.defaultTabWidth||"4",resolved=theme==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?systemDark:systemLight):theme,colors=palette[resolved]||palette["odin-light"];d.theme=resolved;d.motion=motion;r.style.colorScheme=dark.has(resolved)?"dark":"light";r.style.backgroundColor=colors[0];r.style.color=colors[1];r.style.setProperty("--code-tab-width",tab)})();`
 
 SITE_CSS :: `
 :root { color-scheme: light dark; --bg:#f6f7f4; --surface:#ffffff; --surface-raised:#fbfcfa; --text:#1b231d; --muted:#617066; --line:#d8ded8; --accent:#08784b; --accent-ink:#ffffff; --code:#f0f4f0; --focus:#1d8dcb; font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
@@ -1306,6 +1352,23 @@ SITE_CSS :: `
    conventional language package sites: section rules, compact signatures, and
    a persistent local index rather than a stack of dashboard cards. */
 main.reference-layout{max-width:1380px;display:grid;grid-template-columns:minmax(0,1fr) 218px;gap:48px;align-items:start;padding-top:32px}.reference-layout .reference{max-width:960px;min-width:0}.breadcrumb{font-size:.88rem;color:var(--muted)}.breadcrumb a{color:inherit}.package-heading{padding:10px 0 20px;border-bottom:1px solid var(--line)}.package-heading .package-path{margin:0;color:var(--muted);font-size:.84rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.package-heading h1{margin:3px 0 0;font-size:clamp(2rem,4vw,3.2rem);line-height:1.08;letter-spacing:-.045em}.reference>.package-heading+*{margin-top:22px}.file{padding:28px 0 0;margin:0;border:0;border-top:1px solid var(--line)}.file:first-of-type{margin-top:28px}.file-heading h2{margin:0;font-size:1.12rem;letter-spacing:-.01em}.imports{margin:6px 0 16px;font-size:.84rem}.imports a{color:inherit;text-decoration-style:dotted}.symbol{padding:22px 0;margin:0;background:transparent;border:0;border-bottom:1px solid var(--line);border-radius:0;scroll-margin-top:88px}.symbol-heading{display:flex;align-items:baseline;gap:12px}.symbol .kind{display:inline-block;flex:none;margin:0;padding:2px 0;border:0;border-radius:0;background:transparent;color:var(--muted);font-size:.73rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em}.symbol h3{margin:0;font-size:1.25rem;line-height:1.25}.symbol-name{color:var(--accent);text-decoration:none}.symbol-name:hover{text-decoration:underline}.symbol pre{margin:10px 0 0;padding:10px 14px;background:var(--code);border:1px solid var(--line);border-radius:6px;font-size:.94rem;line-height:1.45}.symbol p{margin:12px 0}.symbol .summary{font-weight:650}.symbol h4{margin:16px 0 4px;font-size:.92rem}.doc-table-wrap{overflow:auto;margin:14px 0;border:1px solid var(--line);border-radius:6px}.doc-table{width:100%;border-collapse:collapse;font-size:.92rem}.doc-table th,.doc-table td{padding:8px 11px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}.doc-table th{background:var(--code);font-weight:700}.doc-table tr:last-child td{border-bottom:0}.doc-table p{margin:0}.package-toc{position:sticky;top:92px;max-height:calc(100vh - 112px);overflow:auto;border-left:1px solid var(--line);padding-left:18px;font-size:.84rem;line-height:1.35}.package-toc nav>a,.toc-group a{display:block;color:var(--muted);text-decoration:none;padding:3px 0}.package-toc a:hover,.package-toc a:focus-visible{color:var(--accent)}.toc-title{margin:0 0 7px;color:var(--text);font-weight:700}.toc-group{margin:12px 0}.toc-group .toc-file{color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toc-group .toc-entry{padding-left:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.reference-layout+footer{max-width:1380px}@media(max-width:980px){main.reference-layout{display:block;max-width:980px}.package-toc{display:none}.reference-layout .reference{max-width:none}}@media(max-width:620px){main.reference-layout{padding-top:24px}.symbol-heading{display:block}.symbol .kind{margin-bottom:4px}.symbol h3{font-size:1.13rem}.symbol pre{font-size:.84rem;padding:9px 11px}.file{padding-top:22px}}.package-directory{margin-top:46px}.section-heading{display:flex;align-items:baseline;justify-content:space-between;gap:20px;margin-bottom:10px}.section-heading h2{margin:0;letter-spacing:-.025em}.section-heading p{margin:0;color:var(--muted);font-size:.9rem}.home .packages{display:block;gap:0;margin:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}.home .packages li+li{border-top:1px solid var(--line)}.home .packages a{padding:11px 14px;border:0;border-radius:0;background:transparent;transform:none}.home .packages a:hover{background:var(--surface-raised);border-color:transparent;transform:none}.home .packages .package-route{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92rem;color:var(--accent)}.home .packages .package-meta{margin-top:1px;font-size:.8rem}.home .packages .package-summary{margin-top:3px;font-size:.86rem;line-height:1.35}@media(max-width:620px){.section-heading{display:block}.section-heading p{margin-top:3px}}
+`
+
+// The first two presets deliberately echo Odin's public package site: a bright
+// blue primary action and orange secondary accent in light mode, then a vivid
+// Monokai-inspired dark reference surface. GitHub Light and Tokyo Night give
+// readers two familiar alternatives without changing document structure.
+SITE_THEME_PRESETS_CSS :: `
+:root,:root[data-theme="odin-light"]{color-scheme:light;--bg:#f7f9ff;--surface:#ffffff;--surface-raised:#f2f6ff;--text:#14213d;--muted:#52627b;--line:#d6e0f0;--accent:#0059d6;--secondary:#f06f00;--accent-ink:#ffffff;--code:#edf3ff;--focus:#f06f00}
+:root[data-theme="monokai"]{color-scheme:dark;--bg:#272822;--surface:#30312b;--surface-raised:#3a3b34;--text:#f8f8f2;--muted:#b6b5a9;--line:#515249;--accent:#a6e22e;--secondary:#fd971f;--accent-ink:#20211c;--code:#1f201b;--focus:#66d9ef}
+:root[data-theme="github-light"]{color-scheme:light;--bg:#ffffff;--surface:#ffffff;--surface-raised:#f6f8fa;--text:#1f2328;--muted:#57606a;--line:#d0d7de;--accent:#0969da;--secondary:#bf8700;--accent-ink:#ffffff;--code:#f6f8fa;--focus:#0969da}
+:root[data-theme="tokyo-night"]{color-scheme:dark;--bg:#1a1b26;--surface:#24283b;--surface-raised:#2f354f;--text:#c0caf5;--muted:#9aa5ce;--line:#414868;--accent:#7aa2f7;--secondary:#ff9e64;--accent-ink:#1a1b26;--code:#16161e;--focus:#bb9af7}
+.site-header #site-search{display:inline-flex;align-items:center;gap:8px;min-height:38px;padding:0 10px 0 12px;border-color:var(--accent);border-radius:999px;background:var(--accent);color:var(--accent-ink);font-weight:750;box-shadow:0 4px 12px color-mix(in srgb,var(--accent) 24%,transparent);transition:background .14s ease,transform .14s ease,box-shadow .14s ease}.site-header #site-search:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 88%,#000);color:var(--accent-ink);transform:translateY(-1px);box-shadow:0 7px 16px color-mix(in srgb,var(--accent) 30%,transparent)}.site-header #site-search:focus-visible{outline-color:color-mix(in srgb,var(--focus) 68%,transparent)}.search-trigger-icon{font-size:1.12em;line-height:1}.site-header #site-search kbd{padding:2px 5px;border:1px solid color-mix(in srgb,var(--accent-ink) 42%,transparent);border-radius:5px;background:color-mix(in srgb,var(--accent-ink) 14%,transparent);color:inherit;font-size:.72em;font-weight:700;line-height:1.1}.site-header #site-settings{color:var(--muted)}@media(max-width:620px){.site-header #site-search{padding:0 11px}.site-header #site-search span:not(.search-trigger-icon){display:none}}
+.eyebrow{color:var(--secondary)}.settings-form fieldset{display:grid;gap:9px;margin:0;padding:12px;border:1px solid var(--line);border-radius:8px}.settings-form legend{padding:0 4px;color:var(--text);font-size:.86rem;font-weight:700}.settings-form fieldset p{margin:0;color:var(--muted);font-size:.78rem;line-height:1.4}.settings-form fieldset label{font-size:.8rem}
+:root[data-theme="odin-light"] .tok-keyword{color:#005cc5}:root[data-theme="odin-light"] .tok-literal{color:#bf4d00}:root[data-theme="odin-light"] .tok-operator{color:#52627b}:root[data-theme="odin-light"] .tok-comment{color:#6a737d}:root[data-theme="odin-light"] .tok-directive{color:#7c3aed}:root[data-theme="odin-light"] .tok-invalid{color:#cf222e}:root[data-theme="odin-light"] .tok-link{color:#0059d6}
+:root[data-theme="monokai"] .tok-keyword{color:#f92672}:root[data-theme="monokai"] .tok-literal{color:#ae81ff}:root[data-theme="monokai"] .tok-operator{color:#f8f8f2}:root[data-theme="monokai"] .tok-comment{color:#a7a799}:root[data-theme="monokai"] .tok-directive{color:#66d9ef}:root[data-theme="monokai"] .tok-invalid{color:#f92672}:root[data-theme="monokai"] .tok-link{color:#a6e22e}
+:root[data-theme="github-light"] .tok-keyword{color:#cf222e}:root[data-theme="github-light"] .tok-literal{color:#0550ae}:root[data-theme="github-light"] .tok-operator{color:#57606a}:root[data-theme="github-light"] .tok-comment{color:#6e7781}:root[data-theme="github-light"] .tok-directive{color:#8250df}:root[data-theme="github-light"] .tok-invalid{color:#cf222e}:root[data-theme="github-light"] .tok-link{color:#0969da}
+:root[data-theme="tokyo-night"] .tok-keyword{color:#bb9af7}:root[data-theme="tokyo-night"] .tok-literal{color:#ff9e64}:root[data-theme="tokyo-night"] .tok-operator{color:#89ddff}:root[data-theme="tokyo-night"] .tok-comment{color:#565f89}:root[data-theme="tokyo-night"] .tok-directive{color:#7dcfff}:root[data-theme="tokyo-night"] .tok-invalid{color:#f7768e}:root[data-theme="tokyo-night"] .tok-link{color:#7aa2f7}
 `
 
 // Keep the browser's document scrollbar native. These rules only theme scroll
@@ -1356,23 +1419,23 @@ SITE_JS :: `
 // without changing project configuration or requiring a server.
 SITE_SETTINGS_JS :: `
 (() => {
-  const root=document.documentElement,key="varde-settings",settings=document.querySelector("#site-settings"),dialog=document.querySelector("#settings-dialog"),close=document.querySelector("#settings-close"),form=document.querySelector("#settings-form"),reset=document.querySelector("#settings-reset"),themeToggle=document.querySelector("#theme-toggle");
+  const root=document.documentElement,key="varde-settings",settings=document.querySelector("#site-settings"),dialog=document.querySelector("#settings-dialog"),close=document.querySelector("#settings-close"),form=document.querySelector("#settings-form"),reset=document.querySelector("#settings-reset");
   if(!form)return;
-  const defaults={theme:root.dataset.defaultTheme||"system",motion:root.dataset.defaultMotion||"system",tabWidth:root.dataset.defaultTabWidth||"4",collapsePackages:root.dataset.defaultCollapsePackages!=="false"};
-  const validTheme=value=>["system","light","dark"].includes(value),validMotion=value=>["system","full","reduced"].includes(value),validTab=value=>["2","4","8"].includes(String(value));
+  const presets=["odin-light","monokai","github-light","tokyo-night"],darkThemes=new Set(["monokai","tokyo-night"]),normalizeTheme=value=>value==="light"?"odin-light":value==="dark"?"monokai":value,validPreset=value=>presets.includes(normalizeTheme(value)),validTheme=value=>value==="system"||validPreset(value),validMotion=value=>["system","full","reduced"].includes(value),validTab=value=>["2","4","8"].includes(String(value));
+  const defaults={theme:normalizeTheme(root.dataset.defaultTheme)||"system",systemLightTheme:normalizeTheme(root.dataset.systemLightTheme)||"odin-light",systemDarkTheme:normalizeTheme(root.dataset.systemDarkTheme)||"monokai",motion:root.dataset.defaultMotion||"system",tabWidth:root.dataset.defaultTabWidth||"4",collapsePackages:root.dataset.defaultCollapsePackages!=="false"};
+  const palette={"odin-light":["#f7f9ff","#14213d"],monokai:["#272822","#f8f8f2"],"github-light":["#ffffff","#1f2328"],"tokyo-night":["#1a1b26","#c0caf5"]};
   const fallbackKey="__varde_settings_v1__";
   const fallbackRead=()=>{try{const name=window.name||"";if(!name)return "";const bag=JSON.parse(name);return typeof bag[fallbackKey]==="string"?bag[fallbackKey]:"";}catch(_){return "";}};
   const fallbackWrite=raw=>{try{const name=window.name||"",bag=name?JSON.parse(name):{};bag[fallbackKey]=raw;window.name=JSON.stringify(bag);}catch(_){}};
   const fallbackClear=()=>{try{const name=window.name||"",bag=name?JSON.parse(name):{};delete bag[fallbackKey];window.name=JSON.stringify(bag);}catch(_){}};
   const read=()=>{let raw="";try{raw=localStorage.getItem(key)||"";}catch(_){}if(!raw)raw=fallbackRead();try{return {...defaults,...JSON.parse(raw||"{}")} ;}catch(_){return {...defaults};}};
   const save=value=>{const raw=JSON.stringify(value);try{localStorage.setItem(key,raw);}catch(_){}fallbackWrite(raw);};
-  const updateThemeButton=()=>{if(!themeToggle)return;const dark=root.dataset.theme?root.dataset.theme==="dark":matchMedia("(prefers-color-scheme: dark)").matches;themeToggle.textContent=dark?"Light":"Dark";themeToggle.setAttribute("aria-pressed",String(dark));};
-  const apply=value=>{const state={theme:validTheme(value.theme)?value.theme:defaults.theme,motion:validMotion(value.motion)?value.motion:defaults.motion,tabWidth:validTab(value.tabWidth)?String(value.tabWidth):defaults.tabWidth,collapsePackages:typeof value.collapsePackages==="boolean"?value.collapsePackages:defaults.collapsePackages};if(state.theme==="system")delete root.dataset.theme;else root.dataset.theme=state.theme;root.dataset.motion=state.motion;root.style.setProperty("--code-tab-width",state.tabWidth);document.querySelectorAll("details[data-package-branch]").forEach(branch=>branch.open=!state.collapsePackages);form.elements.theme.value=state.theme;form.elements.motion.value=state.motion;form.elements.tabWidth.value=state.tabWidth;form.elements.collapsePackages.checked=state.collapsePackages;updateThemeButton();return state;};
+  const apply=value=>{const state={theme:validTheme(value.theme)?normalizeTheme(value.theme):defaults.theme,systemLightTheme:validPreset(value.systemLightTheme)?normalizeTheme(value.systemLightTheme):defaults.systemLightTheme,systemDarkTheme:validPreset(value.systemDarkTheme)?normalizeTheme(value.systemDarkTheme):defaults.systemDarkTheme,motion:validMotion(value.motion)?value.motion:defaults.motion,tabWidth:validTab(value.tabWidth)?String(value.tabWidth):defaults.tabWidth,collapsePackages:typeof value.collapsePackages==="boolean"?value.collapsePackages:defaults.collapsePackages};const resolved=state.theme==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?state.systemDarkTheme:state.systemLightTheme):state.theme,colors=palette[resolved]||palette["odin-light"];root.dataset.theme=resolved;root.dataset.motion=state.motion;root.style.colorScheme=darkThemes.has(resolved)?"dark":"light";root.style.backgroundColor=colors[0];root.style.color=colors[1];root.style.setProperty("--code-tab-width",state.tabWidth);document.querySelectorAll("details[data-package-branch]").forEach(branch=>branch.open=!state.collapsePackages);form.elements.theme.value=state.theme;form.elements.systemLightTheme.value=state.systemLightTheme;form.elements.systemDarkTheme.value=state.systemDarkTheme;form.elements.motion.value=state.motion;form.elements.tabWidth.value=state.tabWidth;form.elements.collapsePackages.checked=state.collapsePackages;return state;};
   let state=apply(read());
   settings?.addEventListener("click",()=>{if(!dialog.open)dialog.showModal();});close?.addEventListener("click",()=>dialog.close());dialog?.addEventListener("click",event=>{if(event.target===dialog)dialog.close();});
-  form.addEventListener("change",()=>{state=apply({theme:form.elements.theme.value,motion:form.elements.motion.value,tabWidth:form.elements.tabWidth.value,collapsePackages:form.elements.collapsePackages.checked});save(state);});
+  form.addEventListener("change",()=>{state=apply({theme:form.elements.theme.value,systemLightTheme:form.elements.systemLightTheme.value,systemDarkTheme:form.elements.systemDarkTheme.value,motion:form.elements.motion.value,tabWidth:form.elements.tabWidth.value,collapsePackages:form.elements.collapsePackages.checked});save(state);});
   reset?.addEventListener("click",()=>{try{localStorage.removeItem(key);}catch(_){}fallbackClear();state=apply(defaults);});
-  themeToggle?.addEventListener("click",()=>{state={...state,theme:root.dataset.theme==="dark"?"light":"dark"};state=apply(state);save(state);try{localStorage.removeItem("varde-theme");}catch(_){}});
+  matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change",()=>{if(state.theme==="system")state=apply(state);});
   document.addEventListener("keydown",event=>{const editable=event.target instanceof HTMLInputElement||event.target instanceof HTMLSelectElement||event.target?.isContentEditable;if(event.key===","&&!editable&&!dialog?.open){event.preventDefault();settings?.click();}else if(event.key==="Escape"&&dialog?.open)dialog.close();});
 })();
 `
@@ -1419,6 +1482,7 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 	// instead of centering a wide shell with a narrow, left-aligned child.
 	strings.write_string(&css_builder, "#settings-dialog{width:min(470px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);margin:auto;padding:0;border:0;background:transparent;color:var(--text)}#settings-dialog .settings-dialog{width:100%;max-width:none}\n")
 	strings.write_string(&css_builder, SITE_REFERENCE_WIDTH_CSS)
+	strings.write_string(&css_builder, SITE_THEME_PRESETS_CSS)
 	if err := write_text_file(css_path, &css_builder); len(err) > 0 do return err
 	js_builder: strings.Builder
 	defer strings.builder_destroy(&js_builder)
@@ -1556,7 +1620,8 @@ test_output_path_rejects_escape :: proc(t: ^testing.T) {
 @(test)
 test_source_links_are_opt_in_and_https_only :: proc(t: ^testing.T) {
 	config := config_default("/workspace", "", "")
-	testing.expect(t, config.schema_version == SITE_SCHEMA_VERSION && config.title == "workspace Documentation" && !config.include_source_links && config.theme == "system" && config.motion == "system" && config.code_tab_width == 4 && config.collapse_package_tree, "new site configs should provide project-specific titles and readable presentation defaults")
+	testing.expect(t, config.schema_version == SITE_SCHEMA_VERSION && config.title == "workspace Documentation" && !config.include_source_links && config.theme == "system" && config.system_light_theme == THEME_ODIN_LIGHT && config.system_dark_theme == THEME_MONOKAI && config.motion == "system" && config.code_tab_width == 4 && config.collapse_package_tree, "new site configs should provide project-specific titles and readable presentation defaults")
+	testing.expect(t, site_theme_valid(THEME_ODIN_LIGHT) && site_theme_valid(THEME_MONOKAI) && site_theme_valid(THEME_GITHUB_LIGHT) && site_theme_valid(THEME_TOKYO_NIGHT) && site_theme_is_dark(THEME_MONOKAI) && site_theme_is_dark(THEME_TOKYO_NIGHT), "the four supported presets should classify their colour mode")
 	relative_config := config_default(".", "", "")
 	testing.expect(t, relative_config.title != ". Documentation", "relative workspace roots should resolve to their project directory name")
 	config.include_source_links = true
@@ -1629,12 +1694,12 @@ test_config_reads_legacy_vigil_site_and_writes_varde_config :: proc(t: ^testing.
 	testing.expect(t, err == nil, "temporary configuration root should be created")
 	defer _ = os.remove_all(root)
 	legacy_path := path_join({root, SITE_LEGACY_CONFIG_FILE_NAME})
-	legacy_config := `{"schema_version":2,"title":"Migrated","description":"A project","output_dir":"dist/docs","include_brand_artwork":false,"include_source_links":false,"source_url_prefix":""}`
+	legacy_config := `{"schema_version":2,"title":"Migrated","description":"A project","output_dir":"dist/docs","include_brand_artwork":false,"include_source_links":false,"source_url_prefix":"","theme":"dark"}`
 	write_err := os.write_entire_file(legacy_path, legacy_config)
 	testing.expect(t, write_err == nil, "legacy site configuration should be writable")
 	config, load_err := config_load(root, "", "")
 	defer config_destroy(&config)
-	testing.expect(t, len(load_err) == 0 && config.title == "Migrated" && config.output_dir == "dist/docs", "legacy Vigil configuration should remain usable")
+	testing.expect(t, len(load_err) == 0 && config.title == "Migrated" && config.output_dir == "dist/docs" && config.theme == THEME_MONOKAI && config.system_light_theme == THEME_ODIN_LIGHT && config.system_dark_theme == THEME_MONOKAI, "legacy Vigil configuration should remain usable and receive theme defaults")
 	testing.expect(t, config.schema_version == SITE_SCHEMA_VERSION, "loaded configurations should migrate to Varde's schema")
 	save_err := config_save(root, config)
 	testing.expect(t, len(save_err) == 0 && os.exists(path_join({root, SITE_CONFIG_FILE_NAME})), "saving a migrated config should create varde.json")
@@ -1785,7 +1850,7 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	config := config_default(root, "Demo", "A safe static site.")
 	config.include_source_links = true
 	config.source_url_prefix = "https://example.test/demo/blob/main"
-	config.theme = "dark"
+	config.theme = THEME_MONOKAI
 	config.motion = "reduced"
 	config.code_tab_width = 2
 	config.head_html = "docs/head.html"
@@ -1806,22 +1871,22 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	index_data, index_read_err := os.read_entire_file(index, context.temp_allocator)
 	testing.expect(t, index_read_err == nil && !strings.contains(string(index_data), "home-insights"), "the homepage should prioritize the package directory over promotional cards")
 	testing.expect(t, index_read_err == nil && strings.contains(string(index_data), "search-results-scroll"), "the generated dialog should isolate result scrolling")
-	testing.expect(t, index_read_err == nil && strings.contains(string(index_data), ">Demo</a><button id=\"site-search\""), "the header should use the configured project title rather than a Varde-specific label")
+	testing.expect(t, index_read_err == nil && strings.contains(string(index_data), ">Demo</a><button id=\"site-search\" class=\"search-trigger\"") && strings.contains(string(index_data), "search-trigger-icon") && !strings.contains(string(index_data), "id=\"theme-toggle\""), "the header should use the configured project title with the search trigger as its primary action")
 	testing.expect(t, index_read_err == nil && !strings.contains(string(index_data), "Varde Docs"), "generated headers should not hard-code the Varde product name")
-	testing.expect(t, index_read_err == nil && strings.contains(string(index_data), "data-default-theme=\"dark\"") && strings.contains(string(index_data), "data-theme=\"dark\"") && strings.contains(string(index_data), "data-default-tab-width=\"2\""), "project presentation defaults should reach every generated page")
+	testing.expect(t, index_read_err == nil && strings.contains(string(index_data), "data-default-theme=\"monokai\"") && strings.contains(string(index_data), "data-theme=\"monokai\"") && strings.contains(string(index_data), "data-system-light-theme=\"odin-light\"") && strings.contains(string(index_data), "data-system-dark-theme=\"monokai\"") && strings.contains(string(index_data), "data-default-tab-width=\"2\""), "project presentation defaults should reach every generated page")
 	testing.expect(t, index_read_err == nil && strings.contains(string(index_data), "<meta name=\"color-scheme\" content=\"dark\">") && strings.contains(string(index_data), "<meta name=\"color-scheme\"") && strings.index(string(index_data), "<meta name=\"color-scheme\"") < strings.index(string(index_data), "assets/site.css"), "fixed project themes should declare their preferred color scheme before stylesheets load")
 	light_config := config
-	light_config.theme = "light"
+	light_config.theme = THEME_ODIN_LIGHT
 	light_head: strings.Builder
 	defer strings.builder_destroy(&light_head)
 	site_head(&light_head, "Light", "Demo", "assets/", "", light_config, {})
 	light_markup := strings.to_string(light_head)
-	testing.expect(t, strings.contains(light_markup, "data-theme=\"light\"") && strings.contains(light_markup, "<meta name=\"color-scheme\" content=\"light\">") && strings.index(light_markup, "<meta name=\"color-scheme\"") < strings.index(light_markup, "assets/site.css"), "a fixed light theme must establish the light browser canvas before a dark system preference can paint")
+	testing.expect(t, strings.contains(light_markup, "data-theme=\"odin-light\"") && strings.contains(light_markup, "<meta name=\"color-scheme\" content=\"light\">") && strings.index(light_markup, "<meta name=\"color-scheme\"") < strings.index(light_markup, "assets/site.css"), "a fixed light theme must establish the light browser canvas before a dark system preference can paint")
 	bootstrap_index := strings.index(string(index_data), "varde-settings")
 	stylesheet_index := strings.index(string(index_data), "assets/site.css")
 	testing.expect(t, index_read_err == nil && bootstrap_index >= 0 && bootstrap_index < stylesheet_index, "saved reader preferences should be applied before the first stylesheet can paint")
 	testing.expect(t, strings.contains(SITE_THEME_BOOTSTRAP_JS, "r.style.colorScheme") && strings.contains(SITE_THEME_BOOTSTRAP_JS, "r.style.backgroundColor"), "the pre-stylesheet bootstrap should align the browser canvas with the resolved reader theme")
-	testing.expect(t, index_read_err == nil && strings.contains(string(index_data), "id=\"settings-dialog\"") && strings.contains(string(index_data), "id=\"site-settings\""), "generated sites should expose persistent reader settings")
+	testing.expect(t, index_read_err == nil && strings.contains(string(index_data), "id=\"settings-dialog\"") && strings.contains(string(index_data), "id=\"site-settings\"") && strings.contains(string(index_data), "name=\"systemLightTheme\"") && strings.contains(string(index_data), "name=\"systemDarkTheme\""), "generated sites should expose persistent reader settings and system theme variants")
 	testing.expect(t, index_read_err == nil && strings.contains(string(index_data), "demo-extension") && strings.contains(string(index_data), "before-content") && strings.contains(string(index_data), "after-content"), "configured trusted HTML insertion points should be emitted")
 	testing.expect(t, os.exists(package_page), "package page should be generated")
 	overrides_data, overrides_read_err := os.read_entire_file(overrides_path, context.temp_allocator)
