@@ -1204,14 +1204,25 @@ main.reference-layout{max-width:1380px;display:grid;grid-template-columns:minmax
 // regions that belong to the documentation UI, where their own surface gives
 // the track a clear visual home in either reader theme.
 SITE_SCOPED_SCROLLBAR_CSS :: `
-.package-explorer,.package-toc{--varde-scroll-track:var(--bg);--varde-scroll-thumb:color-mix(in srgb,var(--muted) 58%,var(--bg));scrollbar-width:thin;scrollbar-color:var(--varde-scroll-thumb) var(--varde-scroll-track)}
-.reference pre,.doc-table-wrap{--varde-scroll-track:var(--code);--varde-scroll-thumb:color-mix(in srgb,var(--muted) 62%,var(--code));scrollbar-width:thin;scrollbar-color:var(--varde-scroll-thumb) var(--varde-scroll-track)}
-.search-results-scroll{--varde-scroll-track:var(--surface);--varde-scroll-thumb:color-mix(in srgb,var(--muted) 58%,var(--surface));scrollbar-width:thin;scrollbar-color:var(--varde-scroll-thumb) var(--varde-scroll-track)}
+.package-explorer,.package-toc{--varde-scroll-surface:var(--bg);--varde-scroll-thumb:color-mix(in srgb,var(--muted) 58%,var(--bg));--varde-scroll-track-active:color-mix(in srgb,var(--surface-raised) 84%,var(--bg));scrollbar-width:thin;scrollbar-color:var(--varde-scroll-thumb) transparent}
+.reference pre,.doc-table-wrap{--varde-scroll-surface:var(--code);--varde-scroll-thumb:color-mix(in srgb,var(--muted) 62%,var(--code));--varde-scroll-track-active:color-mix(in srgb,var(--surface-raised) 50%,var(--code));scrollbar-width:thin;scrollbar-color:var(--varde-scroll-thumb) transparent}
+.search-results-scroll{--varde-scroll-surface:var(--surface);--varde-scroll-thumb:color-mix(in srgb,var(--muted) 58%,var(--surface));--varde-scroll-track-active:var(--surface-raised);scrollbar-width:thin;scrollbar-color:var(--varde-scroll-thumb) transparent}
+.package-explorer:hover,.package-explorer:focus-within,.package-toc:hover,.package-toc:focus-within,.reference pre:hover,.reference pre:focus-within,.doc-table-wrap:hover,.doc-table-wrap:focus-within,.search-results-scroll:hover,.search-results-scroll:focus-within{scrollbar-color:var(--varde-scroll-thumb) var(--varde-scroll-track-active)}
 .package-explorer::-webkit-scrollbar,.package-toc::-webkit-scrollbar,.reference pre::-webkit-scrollbar,.doc-table-wrap::-webkit-scrollbar,.search-results-scroll::-webkit-scrollbar{width:11px;height:11px}
-.package-explorer::-webkit-scrollbar-track,.package-toc::-webkit-scrollbar-track,.reference pre::-webkit-scrollbar-track,.doc-table-wrap::-webkit-scrollbar-track,.search-results-scroll::-webkit-scrollbar-track{background:var(--varde-scroll-track)}
-.package-explorer::-webkit-scrollbar-thumb,.package-toc::-webkit-scrollbar-thumb,.reference pre::-webkit-scrollbar-thumb,.doc-table-wrap::-webkit-scrollbar-thumb,.search-results-scroll::-webkit-scrollbar-thumb{background:var(--varde-scroll-thumb);border:3px solid var(--varde-scroll-track);border-radius:999px}
-.package-explorer::-webkit-scrollbar-thumb:hover,.package-toc::-webkit-scrollbar-thumb:hover,.reference pre::-webkit-scrollbar-thumb:hover,.doc-table-wrap::-webkit-scrollbar-thumb:hover,.search-results-scroll::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--accent) 54%,var(--varde-scroll-track))}
-.package-explorer::-webkit-scrollbar-corner,.package-toc::-webkit-scrollbar-corner,.reference pre::-webkit-scrollbar-corner,.doc-table-wrap::-webkit-scrollbar-corner,.search-results-scroll::-webkit-scrollbar-corner{background:var(--varde-scroll-track)}
+.package-explorer::-webkit-scrollbar-track,.package-toc::-webkit-scrollbar-track,.reference pre::-webkit-scrollbar-track,.doc-table-wrap::-webkit-scrollbar-track,.search-results-scroll::-webkit-scrollbar-track{background:transparent}
+.package-explorer::-webkit-scrollbar-thumb,.package-toc::-webkit-scrollbar-thumb,.reference pre::-webkit-scrollbar-thumb,.doc-table-wrap::-webkit-scrollbar-thumb,.search-results-scroll::-webkit-scrollbar-thumb{background:var(--varde-scroll-thumb);background-clip:padding-box;border:3px solid transparent;border-radius:999px}
+.package-explorer:hover::-webkit-scrollbar-track,.package-explorer:focus-within::-webkit-scrollbar-track,.package-toc:hover::-webkit-scrollbar-track,.package-toc:focus-within::-webkit-scrollbar-track,.reference pre:hover::-webkit-scrollbar-track,.reference pre:focus-within::-webkit-scrollbar-track,.doc-table-wrap:hover::-webkit-scrollbar-track,.doc-table-wrap:focus-within::-webkit-scrollbar-track,.search-results-scroll:hover::-webkit-scrollbar-track,.search-results-scroll:focus-within::-webkit-scrollbar-track{background:var(--varde-scroll-track-active)}
+.package-explorer:hover::-webkit-scrollbar-thumb,.package-explorer:focus-within::-webkit-scrollbar-thumb,.package-toc:hover::-webkit-scrollbar-thumb,.package-toc:focus-within::-webkit-scrollbar-thumb,.reference pre:hover::-webkit-scrollbar-thumb,.reference pre:focus-within::-webkit-scrollbar-thumb,.doc-table-wrap:hover::-webkit-scrollbar-thumb,.doc-table-wrap:focus-within::-webkit-scrollbar-thumb,.search-results-scroll:hover::-webkit-scrollbar-thumb,.search-results-scroll:focus-within::-webkit-scrollbar-thumb{border-color:var(--varde-scroll-track-active)}
+.package-explorer::-webkit-scrollbar-thumb:hover,.package-toc::-webkit-scrollbar-thumb:hover,.reference pre::-webkit-scrollbar-thumb:hover,.doc-table-wrap::-webkit-scrollbar-thumb:hover,.search-results-scroll::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--accent) 54%,var(--varde-scroll-surface))}
+.package-explorer::-webkit-scrollbar-corner,.package-toc::-webkit-scrollbar-corner,.reference pre::-webkit-scrollbar-corner,.doc-table-wrap::-webkit-scrollbar-corner,.search-results-scroll::-webkit-scrollbar-corner{background:transparent}
+`
+
+// The reading track is deliberately flexible: when both sidebars are visible,
+// it receives all remaining viewport width without compressing the existing
+// declaration rhythm or navigation sizing.
+SITE_REFERENCE_WIDTH_CSS :: `
+main.reference-layout{grid-template-columns:minmax(175px,215px) minmax(0,1fr) minmax(170px,210px)!important;column-gap:clamp(20px,2vw,32px);padding-left:clamp(24px,3vw,56px);padding-right:clamp(24px,3vw,56px)}
+@media(max-width:1120px){main.reference-layout{grid-template-columns:minmax(0,1fr) 210px!important;padding-left:clamp(24px,4vw,56px);padding-right:clamp(24px,4vw,56px)}}
 `
 
 SITE_JS :: `
@@ -1299,6 +1310,7 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 	// The outer native dialog is the centering box. Match it to the visible panel
 	// instead of centering a wide shell with a narrow, left-aligned child.
 	strings.write_string(&css_builder, "#settings-dialog{width:min(470px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);margin:auto;padding:0;border:0;background:transparent;color:var(--text)}#settings-dialog .settings-dialog{width:100%;max-width:none}\n")
+	strings.write_string(&css_builder, SITE_REFERENCE_WIDTH_CSS)
 	if err := write_text_file(css_path, &css_builder); len(err) > 0 do return err
 	js_builder: strings.Builder
 	defer strings.builder_destroy(&js_builder)
@@ -1494,7 +1506,9 @@ test_search_dialog_keeps_controls_outside_result_scroller :: proc(t: ^testing.T)
 	testing.expect(t, strings.contains(SITE_JS, "destination.pathname+=\"index.html\""), "offline directory routes should resolve to their concrete entry documents")
 	testing.expect(t, strings.contains(SITE_JS, "tocGroups") && strings.contains(SITE_JS, "toc-group-link"), "the scroll spy should expose the active declaration group as well as the active symbol")
 	testing.expect(t, strings.contains(SITE_SCOPED_SCROLLBAR_CSS, ".package-explorer") && strings.contains(SITE_SCOPED_SCROLLBAR_CSS, ".reference pre") && strings.contains(SITE_SCOPED_SCROLLBAR_CSS, "scrollbar-color"), "nested reference regions should receive theme-aware scrollbar rules")
+	testing.expect(t, strings.contains(SITE_SCOPED_SCROLLBAR_CSS, "scrollbar-color:var(--varde-scroll-thumb) transparent") && strings.contains(SITE_SCOPED_SCROLLBAR_CSS, ":hover::-webkit-scrollbar-track"), "nested scrollbar tracks should stay transparent until their region is active")
 	testing.expect(t, !strings.contains(SITE_SCOPED_SCROLLBAR_CSS, "body::-webkit-scrollbar") && !strings.contains(SITE_SCOPED_SCROLLBAR_CSS, "html::-webkit-scrollbar"), "the document scrollbar should remain browser-native")
+	testing.expect(t, strings.contains(SITE_REFERENCE_WIDTH_CSS, "minmax(0,1fr)") && strings.contains(SITE_REFERENCE_WIDTH_CSS, "minmax(175px,215px)") && !strings.contains(SITE_REFERENCE_WIDTH_CSS, ".symbol{"), "reference pages should give all remaining width to documentation without changing its vertical rhythm")
 }
 
 @(test)
