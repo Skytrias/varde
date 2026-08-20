@@ -632,6 +632,25 @@ test_document_signature_renders_unions_bit_sets_and_type_constants :: proc(t: ^t
 }
 
 @(test)
+test_document_signature_renders_symbolic_nested_fixed_array_bounds :: proc(t: ^testing.T) {
+	document := doc.Document_Init()
+	defer doc.Document_Destroy(&document)
+	append(&document.types, doc.Type{kind = 2, name = "Audio_Sample", types = make([dynamic]u32, 0), entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	inner_children := make([dynamic]u32, 0, 1)
+	append(&inner_children, 1)
+	append(&document.types, doc.Type{kind = 5, elem_count_len = 1, elem_counts = {2, 0, 0, 0}, types = inner_children, entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	append(&document.types, doc.Type{kind = 2, name = "AUDIO_MIX_CHUNK_SIZE", types = make([dynamic]u32, 0), entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	outer_children := make([dynamic]u32, 0, 2)
+	append(&outer_children, 2)
+	append(&outer_children, 3)
+	append(&document.types, doc.Type{kind = 5, types = outer_children, entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0), tags = make([dynamic]string, 0)})
+	chunk := doc.Entity{kind = 2, name = "chunk", type = 4, attributes = make([dynamic]doc.Attribute, 0), grouped_entities = make([dynamic]u32, 0), where_clauses = make([dynamic]string, 0)}
+	adapter := Document_Model{_owned_strings = make([dynamic]string, 0)}
+	defer Document_Model_Destroy(&adapter)
+	testing.expect(t, document_signature(&adapter, &document, chunk, chunk.name, context.allocator) == "chunk :: [AUDIO_MIX_CHUNK_SIZE][2]Audio_Sample", "symbolic fixed-array bounds should render before a nested literal array and its alias")
+}
+
+@(test)
 test_document_signature_renders_procedure_group_members :: proc(t: ^testing.T) {
 	document := doc.Document_Init()
 	defer doc.Document_Destroy(&document)

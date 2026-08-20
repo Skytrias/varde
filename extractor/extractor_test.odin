@@ -177,6 +177,25 @@ lower_represents_procedure_typed_fields_including_empty_argument_lists :: proc(t
 }
 
 @(test)
+lower_preserves_symbolic_fixed_array_bounds_and_nested_aliases :: proc(t: ^testing.T) {
+	document := doc.Document_Init()
+	defer doc.Document_Destroy(&document)
+	array_index, proven := add_annotation_type(&document, "[AUDIO_MIX_CHUNK_SIZE][2]Audio_Sample", context.allocator)
+	testing.expect(t, proven && array_index > 0, "a fixed array with a named bound should be retained as source syntax")
+	if array_index == 0 do return
+	outer := document.types[array_index]
+	testing.expect(t, outer.kind == 5 && len(outer.types) == 2, "a symbolic array bound should use the public format's bound type child")
+	if len(outer.types) < 2 do return
+	bound := document.types[outer.types[1]]
+	inner := document.types[outer.types[0]]
+	testing.expect(t, bound.kind == 2 && bound.name == "AUDIO_MIX_CHUNK_SIZE", "the authored constant name should remain the array bound")
+	testing.expect(t, inner.kind == 5 && inner.elem_counts[0] == 2 && len(inner.types) == 1, "the nested literal array bound should remain numeric")
+	if len(inner.types) == 0 do return
+	alias := document.types[inner.types[0]]
+	testing.expect(t, alias.kind == 2 && alias.name == "Audio_Sample", "the nested element alias should remain intact")
+}
+
+@(test)
 lower_preserves_enum_cases_comments_and_values :: proc(t: ^testing.T) {
 	workspace := Extract(Config{root_path = "extractor/fixtures/enums", target_os = "linux", target_arch = "amd64"})
 	defer Destroy(&workspace)

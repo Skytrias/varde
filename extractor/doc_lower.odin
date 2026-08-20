@@ -423,13 +423,24 @@ add_annotation_type :: proc(document: ^doc.Document, annotation: string, allocat
 	if strings.has_prefix(text, "[") {
 		close := strings.index(text, "]")
 		if close <= 1 do return 0, false
-		count, count_proven := parse_decimal_count(text[1:close])
+		count_text := strings.trim_space(text[1:close])
+		count, count_is_decimal := parse_decimal_count(count_text)
 		element, element_proven := add_annotation_type(document, text[close+1:], allocator)
-		if element == 0 || !count_proven do return 0, false
+		if element == 0 || len(count_text) == 0 do return 0, false
 		array := new_type(5, "", allocator)
-		array.elem_count_len = 1
-		array.elem_counts[0] = count
 		append(&array.types, element)
+		if count_is_decimal {
+			array.elem_count_len = 1
+			array.elem_counts[0] = count
+		} else {
+			// The public format represents a non-literal array bound as the
+			// second type child. Keep the source expression verbatim: evaluating
+			// a named constant (or an expression such as `SIZE * 2`) would require
+			// checker information, but its authored spelling is already known.
+			bound := new_type(2, count_text, allocator)
+			append(&document.types, bound)
+			append(&array.types, u32(len(document.types)-1))
+		}
 		append(&document.types, array)
 		return u32(len(document.types)-1), element_proven
 	}
