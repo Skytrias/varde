@@ -13,6 +13,7 @@ import "core:strings"
 // host defaults; callers building releases should set both explicitly.
 Config :: struct {
 	root_path:       string,
+	source_roots:    []string,
 	target_os:       string,
 	target_arch:     string,
 	include_test_files: bool,
@@ -583,12 +584,22 @@ Extract :: proc(config: Config, allocator: mem.Allocator = context.allocator) ->
 	target_arch := config.target_arch; if len(target_arch) == 0 do target_arch = host_arch()
 	paths := make([dynamic]string, 0, 32, allocator)
 	defer { for path in paths do delete(path, allocator); delete(paths) }
-	w := os.walker_create(root)
-	defer os.walker_destroy(&w)
-	for info in os.walker_walk(&w) {
-		if path, err := os.walker_error(&w); err != nil { add_diagnostic(&workspace, .Discovery, path, 0, 0, "could not traverse source path", allocator); continue }
-		if info.type == .Directory && is_skipped_directory(info.name) { os.walker_skip_dir(&w); continue }
-		if info.type == .Regular && strings.has_suffix(info.name, ".odin") && source_file_matches_target(info.name, target_os, target_arch) do append(&paths, strings.clone(info.fullpath, allocator))
+	root_count := len(config.source_roots)
+	if root_count == 0 do root_count = 1
+	for root_index := 0; root_index < root_count; root_index += 1 {
+		selected_root := root
+		if len(config.source_roots) > 0 {
+			joined, join_err := filepath.join({root, config.source_roots[root_index]}, context.temp_allocator)
+			if join_err != nil { add_diagnostic(&workspace, .Discovery, config.source_roots[root_index], 0, 0, "could not resolve selected source root", allocator); continue }
+			selected_root = joined
+		}
+		w := os.walker_create(selected_root)
+		for info in os.walker_walk(&w) {
+			if path, err := os.walker_error(&w); err != nil { add_diagnostic(&workspace, .Discovery, path, 0, 0, "could not traverse source path", allocator); continue }
+			if info.type == .Directory && is_skipped_directory(info.name) { os.walker_skip_dir(&w); continue }
+			if info.type == .Regular && strings.has_suffix(info.name, ".odin") && source_file_matches_target(info.name, target_os, target_arch) do append(&paths, strings.clone(info.fullpath, allocator))
+		}
+		os.walker_destroy(&w)
 	}
 	slice.sort_by(paths[:], source_file_less)
 	for path in paths {

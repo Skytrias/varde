@@ -21,7 +21,7 @@ SITE_LEGACY_CONFIG_FILE_NAME :: "vigil-site.json"
 SITE_MANIFEST_FILE_NAME :: "varde-site-manifest.json"
 SITE_LEGACY_MANIFEST_FILE_NAME :: "vigil-site-manifest.json"
 SITE_OVERRIDES_CSS_FILE_NAME :: "overrides.css"
-SITE_SCHEMA_VERSION :: 5
+SITE_SCHEMA_VERSION :: 7
 
 THEME_ODIN_LIGHT :: "odin-light"
 THEME_MONOKAI :: "monokai"
@@ -38,11 +38,23 @@ SITE_OVERRIDES_CSS :: `/*
 
 `
 
+Source_Config :: struct {
+	roots: [dynamic]string `json:"roots"`,
+}
+
+Homepage_Config :: struct {
+	content_file: string `json:"content_file"`,
+	logo:         string `json:"logo"`,
+	logo_alt:     string `json:"logo_alt"`,
+}
+
 Config :: struct {
 	schema_version:       int    `json:"schema_version"`,
 	title:                string `json:"title"`,
 	description:          string `json:"description"`,
 	output_dir:           string `json:"output_dir"`,
+	source:               Source_Config `json:"source"`,
+	homepage:             Homepage_Config `json:"homepage"`,
 	include_brand_artwork: bool   `json:"include_brand_artwork"`,
 	include_source_links:  bool   `json:"include_source_links"`,
 	source_url_prefix:     string `json:"source_url_prefix"`,
@@ -56,6 +68,7 @@ Config :: struct {
 	head_html:             string `json:"head_html"`,
 	before_content_html:   string `json:"before_content_html"`,
 	after_content_html:    string `json:"after_content_html"`,
+	_homepage_content:     []u8   `json:"-"`,
 	_owns_strings:         bool   `json:"-"`,
 }
 
@@ -185,6 +198,28 @@ config_theme_upgrade_legacy :: proc(value: string) -> string {
 config_motion_valid :: proc(value: string) -> bool { return value == "system" || value == "full" || value == "reduced" }
 config_tab_width_valid :: proc(value: int) -> bool { return value == 2 || value == 4 || value == 8 }
 
+// source_roots_validate keeps repository selection deliberately small and
+// predictable. A configured root is either `.` or a direct child of the
+// checkout passed through --source; patterns, nested paths, and upward paths
+// are intentionally not a substitute for a build-system ignore language.
+source_roots_validate :: proc(roots: []string) -> string {
+	seen := make([dynamic]string, 0, len(roots), context.temp_allocator)
+	defer delete(seen)
+	for root, index in roots {
+		trimmed := strings.trim_space(root)
+		if len(trimmed) == 0 do return fmt.tprintf("source.roots[%d] must not be empty", index)
+		if filepath.is_abs(trimmed) do return fmt.tprintf("source.roots[%d] must be relative to --source", index)
+		clean, clean_err := filepath.clean(trimmed, context.temp_allocator)
+		if clean_err != nil || clean != trimmed do return fmt.tprintf("source.roots[%d] must be a clean path", index)
+		parent := filepath.dir(clean)
+		if clean != "." && len(parent) > 0 && parent != "." do return fmt.tprintf("source.roots[%d] must name a repository-root directory", index)
+		if clean == "." && len(roots) != 1 do return "source.roots may use `.` only by itself"
+		for prior in seen do if prior == clean do return fmt.tprintf("source.roots[%d] duplicates %q", index, clean)
+		append(&seen, clean)
+	}
+	return ""
+}
+
 path_join :: proc(parts: []string, allocator := context.temp_allocator) -> string {
 	path, err := filepath.join(parts, allocator)
 	if err != nil do return ""
@@ -195,20 +230,9 @@ config_path :: proc(workspace_path: string, allocator := context.temp_allocator)
 	return path_join({workspace_path, SITE_CONFIG_FILE_NAME}, allocator)
 }
 
-config_load :: proc(workspace_path, title, description: string, allocator := context.allocator) -> (Config, string) {
+config_load_path :: proc(path, workspace_path, title, description: string, allocator := context.allocator) -> (Config, string) {
 	defaults := config_default(workspace_path, title, description)
 	config := defaults
-	path := config_path(workspace_path, allocator)
-	if !os.exists(path) {
-		delete(path, allocator)
-		legacy_path := path_join({workspace_path, SITE_LEGACY_CONFIG_FILE_NAME}, allocator)
-		path = legacy_path
-		if !os.exists(path) {
-			delete(path, allocator)
-			return config, ""
-		}
-	}
-	defer delete(path, allocator)
 	data, err := os.read_entire_file(path, allocator)
 	if err != nil do return config, fmt.tprintf("Could not read site configuration: %v", err)
 	defer delete(data, allocator)
@@ -262,6 +286,30 @@ config_load :: proc(workspace_path, title, description: string, allocator := con
 	return config, ""
 }
 
+config_load :: proc(workspace_path, title, description: string, allocator := context.allocator) -> (Config, string) {
+	path := config_path(workspace_path, allocator)
+	if os.exists(path) {
+		defer delete(path, allocator)
+		return config_load_path(path, workspace_path, title, description, allocator)
+	}
+	delete(path, allocator)
+	legacy_path := path_join({workspace_path, SITE_LEGACY_CONFIG_FILE_NAME}, allocator)
+	if !os.exists(legacy_path) {
+		delete(legacy_path, allocator)
+		return config_default(workspace_path, title, description), ""
+	}
+	defer delete(legacy_path, allocator)
+	return config_load_path(legacy_path, workspace_path, title, description, allocator)
+}
+
+// config_load_file is for an explicit --config path. Unlike config_load, it
+// never falls back to a workspace file, so an attached definition cannot be
+// silently replaced by repository-local settings.
+config_load_file :: proc(path, workspace_path, title, description: string, allocator := context.allocator) -> (Config, string) {
+	if len(strings.trim_space(path)) == 0 do return config_default(workspace_path, title, description), "Configuration path is empty"
+	return config_load_path(path, workspace_path, title, description, allocator)
+}
+
 // Config values loaded from disk own their string fields. Defaults are safe
 // borrowed values and deliberately need no cleanup. Embedders that retain a
 // loaded Config can release it after cloning or saving it.
@@ -273,6 +321,12 @@ config_destroy :: proc(config: ^Config, allocator: mem.Allocator = context.alloc
 	if len(config.title) > 0 do delete(config.title, allocator)
 	if len(config.description) > 0 do delete(config.description, allocator)
 	if len(config.output_dir) > 0 do delete(config.output_dir, allocator)
+	for root in config.source.roots do if len(root) > 0 do delete(root, allocator)
+	delete(config.source.roots)
+	if len(config.homepage.content_file) > 0 do delete(config.homepage.content_file, allocator)
+	if len(config.homepage.logo) > 0 do delete(config.homepage.logo, allocator)
+	if len(config.homepage.logo_alt) > 0 do delete(config.homepage.logo_alt, allocator)
+	delete(config._homepage_content)
 	if len(config.source_url_prefix) > 0 do delete(config.source_url_prefix, allocator)
 	if len(config.theme) > 0 do delete(config.theme, allocator)
 	if len(config.system_light_theme) > 0 do delete(config.system_light_theme, allocator)
@@ -1333,8 +1387,20 @@ write_index_page :: proc(model: ^Model, config: Config, extensions: Site_Extensi
 	site_head(&builder, config.title, config.title, "assets/", "", config, extensions)
 	if len(extensions.before_content) > 0 do strings.write_string(&builder, string(extensions.before_content[:]))
 	strings.write_string(&builder, "<main id=\"main\" class=\"home\"><section class=\"hero\">")
-	if config.include_brand_artwork { strings.write_string(&builder, "<img src=\"assets/brand-mark.png\" width=\"64\" height=\"64\" alt=\"Project mark\">") }
-	strings.write_string(&builder, "<h1>"); html_text(&builder, config.title); strings.write_string(&builder, "</h1><p>"); html_text(&builder, config.description); strings.write_string(&builder, "</p></section><section class=\"metrics\" aria-label=\"Workspace statistics\"><span>")
+	if config.include_brand_artwork {
+		logo_alt := strings.trim_space(config.homepage.logo_alt)
+		if len(logo_alt) == 0 do logo_alt = "Project mark"
+		strings.write_string(&builder, "<img src=\"assets/brand-mark.png\" width=\"64\" height=\"64\" alt=\""); html_attr(&builder, logo_alt); strings.write_string(&builder, "\">")
+	}
+	strings.write_string(&builder, "<h1>"); html_text(&builder, config.title); strings.write_string(&builder, "</h1>")
+	if len(strings.trim_space(config.description)) > 0 { strings.write_string(&builder, "<p>"); html_text(&builder, config.description); strings.write_string(&builder, "</p>") }
+	strings.write_string(&builder, "</section>")
+	if len(config._homepage_content) > 0 {
+		strings.write_string(&builder, "<section class=\"homepage-content\" aria-label=\"Project overview\">")
+		write_doc_body(&builder, string(config._homepage_content[:]), Doc_Render_Context{model = model, output_root = output_root, page_path = page_path})
+		strings.write_string(&builder, "</section>")
+	}
+	strings.write_string(&builder, "<section class=\"metrics\" aria-label=\"Workspace statistics\"><span>")
 	render_stats := site_render_stats(model)
 	write_grouped_count(&builder, render_stats.package_count)
 	strings.write_string(&builder, " packages</span><span>"); write_grouped_count(&builder, render_stats.file_count)
@@ -1603,7 +1669,15 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 	if err := write_overrides_css(staging, output_root); len(err) > 0 { result.error_message = err; return result }
 	if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }
 	index_config := config
-	if !config.include_brand_artwork || len(assets.brand_png) == 0 { index_config.include_brand_artwork = false }
+	if len(assets.brand_png) == 0 {
+		index_config.include_brand_artwork = false
+	} else if len(config.homepage.logo) > 0 {
+		// A new portable project definition opts into its explicitly named logo.
+		// Retain include_brand_artwork for legacy callers that supply Assets.
+		index_config.include_brand_artwork = true
+	} else if !config.include_brand_artwork {
+		index_config.include_brand_artwork = false
+	}
 	if err := write_index_page(model, index_config, extensions, staging); len(err) > 0 { result.error_message = err; return result }
 	for &pkg in model.packages {
 		if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }

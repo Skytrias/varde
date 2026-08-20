@@ -13,8 +13,8 @@ print_usage :: proc() {
 	fmt.eprintln("  varde inspect <file.odin-doc> [...more.odin-doc]")
 	fmt.eprintln("  varde scan --source <directory> [--target-os <os>] [--target-arch <arch>] [--include-tests]")
 	fmt.eprintln("  varde extract --source <directory> --out <file.odin-doc> [--allow-incomplete] [--target-os <os>] [--target-arch <arch>] [--include-tests]")
-	fmt.eprintln("  varde build --doc <file.odin-doc> [--doc <file.odin-doc> ...] [--workspace <path>] [--sloc <count>] [--out <relative-output-dir>]")
-	fmt.eprintln("  varde build --source <directory> [--allow-incomplete] [--emit-doc <file.odin-doc>] [--target-os <os>] [--target-arch <arch>] [--include-tests] [--out <relative-output-dir>]")
+	fmt.eprintln("  varde build --doc <file.odin-doc> [--doc <file.odin-doc> ...] [--workspace <path>] [--config <file>] [--sloc <count>] [--out <relative-output-dir>]")
+	fmt.eprintln("  varde build --source <directory> [--config <file>] [--allow-incomplete] [--emit-doc <file.odin-doc>] [--target-os <os>] [--target-arch <arch>] [--include-tests] [--out <relative-output-dir>]")
 }
 
 scan_source :: proc(root_path, target_os, target_arch: string, include_tests: bool) {
@@ -69,9 +69,10 @@ extract_source :: proc(root_path, output_path, target_os, target_arch: string, i
 	fmt.printf("Wrote %s .odin-doc with %d packages, %d declarations, and %d SLOC to %s\n", status, len(result.document.packages)-1, len(result.document.entities)-1, workspace.sloc, output_path)
 }
 
-build_from_source :: proc(root_path, output_dir, emit_doc_path, target_os, target_arch: string, include_tests, allow_incomplete: bool) {
+build_from_source :: proc(root_path, output_dir, emit_doc_path, target_os, target_arch, project_config_path: string, include_tests, allow_incomplete: bool) {
 	built := varde.Runtime_Build({
 		source_path = root_path,
+		project_config_path = project_config_path,
 		output_dir = output_dir,
 		emit_doc_path = emit_doc_path,
 		target_os = target_os,
@@ -152,10 +153,11 @@ inspect :: proc(paths: []string) {
 	}
 }
 
-build_from_documents :: proc(paths: []string, workspace_path, output_dir: string, sloc: int) {
+build_from_documents :: proc(paths: []string, workspace_path, output_dir, project_config_path: string, sloc: int) {
 	result := varde.Runtime_Build({
 		document_paths = paths,
 		workspace_path = workspace_path,
+		project_config_path = project_config_path,
 		output_dir = output_dir,
 		load_project_config = true,
 		document_sloc = sloc,
@@ -238,8 +240,8 @@ main :: proc() {
 	}
 	doc_paths := make([dynamic]string, 0, 2)
 	defer delete(doc_paths)
-	workspace_path, source_path, emit_doc_path, target_os, target_arch := ".", "", "", "", ""
-	output_dir := "dist/varde"
+	workspace_path, source_path, emit_doc_path, target_os, target_arch, project_config_path := ".", "", "", "", "", ""
+	output_dir := ""
 	document_sloc := 0
 	include_tests, allow_incomplete := false, false
 	for index := 1; index < len(args); index += 1 {
@@ -252,6 +254,10 @@ main :: proc() {
 			if index + 1 >= len(args) { print_usage(); return }
 			index += 1
 			source_path = args[index]
+		case "--config":
+			if index + 1 >= len(args) { print_usage(); return }
+			index += 1
+			project_config_path = args[index]
 		case "--emit-doc":
 			if index + 1 >= len(args) { print_usage(); return }
 			index += 1
@@ -288,9 +294,9 @@ main :: proc() {
 	}
 	if len(source_path) > 0 {
 		if len(doc_paths) > 0 { fmt.eprintln("Choose exactly one input mode: --source or --doc."); return }
-		build_from_source(source_path, output_dir, emit_doc_path, target_os, target_arch, include_tests, allow_incomplete)
+		build_from_source(source_path, output_dir, emit_doc_path, target_os, target_arch, project_config_path, include_tests, allow_incomplete)
 		return
 	}
 	if len(doc_paths) == 0 { print_usage(); return }
-	build_from_documents(doc_paths[:], workspace_path, output_dir, document_sloc)
+	build_from_documents(doc_paths[:], workspace_path, output_dir, project_config_path, document_sloc)
 }

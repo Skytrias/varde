@@ -1,0 +1,8 @@
+{
+  "schema_version": 7,
+  "title": "Odin Documentation",
+  "description": "Offline API reference for Odin.",
+  "source": {
+    "roots": ["core"]
+  }
+}

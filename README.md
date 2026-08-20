@@ -97,6 +97,45 @@ Varde appends the workspace-relative file path and declaration line number to
 that prefix. Use an immutable commit or release tag for published sites; leave
 the setting off for local-only projects.
 
+## Project definitions
+
+Source repositories commonly include examples, build helpers, and test
+programs that are not part of their public API. A single project definition
+selects the public library surface and supplies the homepage metadata:
+
+```json
+{
+  "schema_version": 7,
+  "title": "Odin Documentation",
+  "description": "Offline API reference for Odin.",
+  "source": { "roots": ["core", "base", "vendor"] },
+  "homepage": {
+    "content_file": "overview.md",
+    "logo": "assets/odin-mark.png",
+    "logo_alt": "Odin logo"
+  }
+}
+```
+
+Place this in the source repository as `varde.json`, or keep it separately and
+pass it with `--config path/to/project.varde.json`. Selected roots are always
+relative to `--source`; they must be direct children of that checkout, with no
+globs or escape paths. This makes `"roots": ["karl2d"]`,
+`["ecs"]`, and `["sokol"]` direct definitions for Karl 2D, Muninn, and
+sokol-odin.
+
+`homepage.content_file` is optional project-authored prose rendered with
+Varde's safe documentation markup—no HTML or scripts are inserted. The
+optional `homepage.logo` is a local PNG beside the definition (or in one of its
+subdirectories), limited to 1 MiB and copied into the generated site. Paths
+cannot be absolute or escape the definition directory; Varde never fetches
+homepage content or images from the network. Attached definitions also reject
+the legacy raw-HTML extension hooks. Theme selection is intentionally not part
+of this project-definition surface.
+
+Ready-to-attach definitions for Odin, Karl 2D, Muninn, and sokol-odin are in
+[`examples/project-configs/`](examples/project-configs/).
+
 ## Local preview
 
 For development convenience, Python is used temporarily to serve the generated

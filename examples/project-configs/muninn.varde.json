@@ -1,0 +1,8 @@
+{
+  "schema_version": 7,
+  "title": "Muninn Documentation",
+  "description": "Offline API reference for Muninn.",
+  "source": {
+    "roots": ["ecs"]
+  }
+}

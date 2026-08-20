@@ -30,10 +30,11 @@ jobs:
           source ci/toolchains/odin-linux-amd64.env
           curl --fail --location --retry 3 --retry-all-errors --output odin.tar.gz "$ODIN_LINUX_AMD64_URL"
           echo "$ODIN_LINUX_AMD64_SHA256  odin.tar.gz" | sha256sum --check
-          mkdir odin
-          tar --extract --gzip --file odin.tar.gz --strip-components=1 --directory odin
+          toolchain_dir="$RUNNER_TEMP/varde-odin"
+          mkdir -p "$toolchain_dir"
+          tar --extract --gzip --file odin.tar.gz --strip-components=1 --directory "$toolchain_dir"
           rm odin.tar.gz
-          echo "$GITHUB_WORKSPACE/odin" >> "$GITHUB_PATH"
+          echo "$toolchain_dir" >> "$GITHUB_PATH"
 
       - name: Test and build Varde
         run: |
@@ -49,6 +50,7 @@ jobs:
           python3 tools/build_showcase.py --varde "$GITHUB_WORKSPACE/dist/varde" --output "$GITHUB_WORKSPACE/_site"
           test -f _site/index.html
           test -f _site/projects/varde/index.html
+          test ! -e _site/projects/varde/odin
           test -f _site/projects/odin/index.html
           test -f _site/projects/karl2d/index.html
           test -f _site/projects/muninn/index.html

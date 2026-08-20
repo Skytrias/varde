@@ -119,7 +119,9 @@ def build_varde(varde: Path, workspace: Path, destination: Path, repository: Rep
     shutil.copytree(
         ROOT,
         workspace,
-        ignore=shutil.ignore_patterns(".git", ".varde-*", "dist", "docs", "__pycache__", ".DS_Store"),
+        ignore=shutil.ignore_patterns(
+            ".git", ".varde-*", "dist", "docs", "odin", "__pycache__", ".DS_Store"
+        ),
     )
     configure_site(workspace, "varde", repository)
     build_source_site(varde, workspace, destination)
