@@ -22,6 +22,7 @@ SITE_MANIFEST_FILE_NAME :: "varde-site-manifest.json"
 SITE_LEGACY_MANIFEST_FILE_NAME :: "vigil-site-manifest.json"
 SITE_OVERRIDES_CSS_FILE_NAME :: "overrides.css"
 SITE_SCHEMA_VERSION :: 7
+BUILTIN_TYPES_PAGE_PATH :: "builtin-types/index.html"
 
 THEME_ODIN_LIGHT :: "odin-light"
 THEME_MONOKAI :: "monokai"
@@ -610,6 +611,83 @@ Doc_Render_Context :: struct {
 	file:        ^File,
 }
 
+// These are render-only fallbacks for Odin's stable, foundational type names.
+// They intentionally do not alter .odin-doc data or imply that source mode
+// established compiler semantics. A documented project declaration always
+// wins before this table is consulted.
+Builtin_Type :: struct {
+	name:        string,
+	category:    string,
+	description: string,
+}
+
+ODIN_BUILTIN_TYPES :: []Builtin_Type{
+	{"any", "dynamic value", "A value paired with runtime type information."},
+	{"b8", "boolean storage", "An 8-bit boolean storage type."},
+	{"b16", "boolean storage", "A 16-bit boolean storage type."},
+	{"b32", "boolean storage", "A 32-bit boolean storage type."},
+	{"b64", "boolean storage", "A 64-bit boolean storage type."},
+	{"bool", "boolean", "Odin's boolean type."},
+	{"byte", "unsigned integer", "An alias for u8."},
+	{"complex32", "complex number", "A complex number with f16 components."},
+	{"complex64", "complex number", "A complex number with f32 components."},
+	{"complex128", "complex number", "A complex number with f64 components."},
+	{"cstring", "C string", "A null-terminated C string."},
+	{"cstring16", "C string", "A null-terminated UTF-16 C string."},
+	{"f16", "floating-point", "A 16-bit floating-point type."},
+	{"f16be", "endian floating-point", "A big-endian 16-bit floating-point type."},
+	{"f16le", "endian floating-point", "A little-endian 16-bit floating-point type."},
+	{"f32", "floating-point", "A 32-bit floating-point type."},
+	{"f32be", "endian floating-point", "A big-endian 32-bit floating-point type."},
+	{"f32le", "endian floating-point", "A little-endian 32-bit floating-point type."},
+	{"f64", "floating-point", "A 64-bit floating-point type."},
+	{"f64be", "endian floating-point", "A big-endian 64-bit floating-point type."},
+	{"f64le", "endian floating-point", "A little-endian 64-bit floating-point type."},
+	{"i8", "signed integer", "An 8-bit signed integer."},
+	{"i16", "signed integer", "A 16-bit signed integer."},
+	{"i16be", "endian integer", "A big-endian 16-bit signed integer."},
+	{"i16le", "endian integer", "A little-endian 16-bit signed integer."},
+	{"i32", "signed integer", "A 32-bit signed integer."},
+	{"i32be", "endian integer", "A big-endian 32-bit signed integer."},
+	{"i32le", "endian integer", "A little-endian 32-bit signed integer."},
+	{"i64", "signed integer", "A 64-bit signed integer."},
+	{"i64be", "endian integer", "A big-endian 64-bit signed integer."},
+	{"i64le", "endian integer", "A little-endian 64-bit signed integer."},
+	{"i128", "signed integer", "A 128-bit signed integer."},
+	{"i128be", "endian integer", "A big-endian 128-bit signed integer."},
+	{"i128le", "endian integer", "A little-endian 128-bit signed integer."},
+	{"int", "signed integer", "A pointer-sized signed integer."},
+	{"quaternion64", "quaternion", "A quaternion with f16 components."},
+	{"quaternion128", "quaternion", "A quaternion with f32 components."},
+	{"quaternion256", "quaternion", "A quaternion with f64 components."},
+	{"rawptr", "raw pointer", "An untyped raw pointer."},
+	{"rune", "Unicode code point", "A distinct type for a Unicode code point."},
+	{"string", "string", "Odin's immutable string view type."},
+	{"typeid", "type identifier", "Runtime identity for a type."},
+	{"u8", "unsigned integer", "An 8-bit unsigned integer."},
+	{"u16", "unsigned integer", "A 16-bit unsigned integer."},
+	{"u16be", "endian integer", "A big-endian 16-bit unsigned integer."},
+	{"u16le", "endian integer", "A little-endian 16-bit unsigned integer."},
+	{"u32", "unsigned integer", "A 32-bit unsigned integer."},
+	{"u32be", "endian integer", "A big-endian 32-bit unsigned integer."},
+	{"u32le", "endian integer", "A little-endian 32-bit unsigned integer."},
+	{"u64", "unsigned integer", "A 64-bit unsigned integer."},
+	{"u64be", "endian integer", "A big-endian 64-bit unsigned integer."},
+	{"u64le", "endian integer", "A little-endian 64-bit unsigned integer."},
+	{"u128", "unsigned integer", "A 128-bit unsigned integer."},
+	{"u128be", "endian integer", "A big-endian 128-bit unsigned integer."},
+	{"u128le", "endian integer", "A little-endian 128-bit unsigned integer."},
+	{"uint", "unsigned integer", "A pointer-sized unsigned integer."},
+	{"uintptr", "unsigned integer", "An unsigned integer large enough to hold a pointer."},
+}
+
+builtin_type_find :: proc(name: string) -> (Builtin_Type, bool) {
+	for builtin in ODIN_BUILTIN_TYPES {
+		if builtin.name == name do return builtin, true
+	}
+	return {}, false
+}
+
 Site_Package_Index :: struct {
 	pkg:        ^Package,
 	entries:    map[string]^Entry,
@@ -707,6 +785,17 @@ odin_identifier_is_local_label :: proc(code: string, end: int) -> bool {
 	return index < len(code) && code[index] == ':' && (index+1 >= len(code) || code[index+1] != ':')
 }
 
+odin_identifier_is_selector :: proc(code: string, end: int) -> bool {
+	index := end
+	for index < len(code) && (code[index] == ' ' || code[index] == '\t' || code[index] == '\r' || code[index] == '\n') do index += 1
+	return index < len(code) && code[index] == '.'
+}
+
+builtin_type_href :: proc(ctx: Doc_Render_Context, name: string) -> string {
+	target_path := path_join({ctx.output_root, BUILTIN_TYPES_PAGE_PATH})
+	return package_href_from(ctx.page_path, target_path, strings.concatenate({"builtin-", name}, context.temp_allocator))
+}
+
 write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render_Context) {
 	lexer: tokenizer.Tokenizer
 	tokenizer.init(&lexer, code, "", nil)
@@ -732,19 +821,36 @@ write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render
 		if is_directive do class = "tok-directive"
 		href := ""
 		linked := false
+		builtin: Builtin_Type
+		unresolved := false
 		if token.kind == .Ident && !is_directive && !odin_identifier_is_local_label(code, end) {
 			if len(selector_alias) > 0 {
 				href, linked = site_internal_href(ctx, strings.concatenate({selector_alias, ".", text}, context.temp_allocator), false)
 			} else {
 				href, linked = site_internal_href(ctx, text, false)
+				if !linked {
+					builtin, linked = builtin_type_find(text)
+					if linked do href = builtin_type_href(ctx, text)
+				}
 			}
+			unresolved = !linked && len(selector_alias) == 0 && !odin_identifier_is_selector(code, end)
 		}
 		if linked {
-			strings.write_string(builder, "<a class=\"tok-link "); strings.write_string(builder, class); strings.write_string(builder, "\" href=\"")
+			strings.write_string(builder, "<a class=\"tok-link "); strings.write_string(builder, class)
+			if len(builtin.name) > 0 do strings.write_string(builder, " tok-builtin")
+			strings.write_string(builder, "\" href=\"")
 			html_attr(builder, href)
-			strings.write_string(builder, "\">"); html_text(builder, text); strings.write_string(builder, "</a>")
+			strings.write_string(builder, "\"")
+			if len(builtin.name) > 0 {
+				strings.write_string(builder, " title=\""); html_attr(builder, strings.concatenate({"Odin built-in type — ", builtin.description}, context.temp_allocator)); strings.write_string(builder, "\"")
+			}
+			strings.write_string(builder, ">"); html_text(builder, text); strings.write_string(builder, "</a>")
 		} else {
-			strings.write_string(builder, "<span class=\""); strings.write_string(builder, class); strings.write_string(builder, "\">")
+			strings.write_string(builder, "<span class=\""); strings.write_string(builder, class)
+			if unresolved do strings.write_string(builder, " tok-unresolved")
+			strings.write_string(builder, "\"")
+			if unresolved do strings.write_string(builder, " title=\"Unresolved reference — no matching declaration is present in this documentation input.\"")
+			strings.write_string(builder, ">");
 			html_text(builder, text)
 			strings.write_string(builder, "</span>")
 		}
@@ -1142,6 +1248,43 @@ write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^P
 		write_package_toc_group(&builder, group, entries[:])
 	}
 	strings.write_string(&builder, "</nav></aside></main>")
+	site_footer(&builder, assets_relative, extensions)
+	return write_text_file(page_path, &builder)
+}
+
+// Built-in types are renderer-owned reference material. Keeping this page out
+// of Model means source extraction and .odin-doc merging remain untouched.
+write_builtin_types_page :: proc(model: ^Model, config: Config, extensions: Site_Extensions, output_root: string) -> string {
+	page_path := path_join({output_root, BUILTIN_TYPES_PAGE_PATH})
+	assets_relative, _ := filepath.rel(filepath.dir(page_path), path_join({output_root, "assets"}), context.temp_allocator)
+	assets_relative = strings.concatenate({assets_relative, "/"}, context.temp_allocator)
+	site_root, _ := filepath.rel(filepath.dir(page_path), output_root, context.temp_allocator)
+	site_root = strings.concatenate({site_root, "/"}, context.temp_allocator)
+	builder: strings.Builder
+	defer strings.builder_destroy(&builder)
+	site_head(&builder, "Odin built-in types", config.title, assets_relative, site_root, config, extensions)
+	if len(extensions.before_content) > 0 do strings.write_string(&builder, string(extensions.before_content[:]))
+	strings.write_string(&builder, "<main id=\"main\" class=\"reference-layout\"><aside class=\"package-explorer\"><nav aria-label=\"Package explorer\"><p class=\"explorer-title\">Packages</p>")
+	write_package_tree(&builder, model, page_path, output_root, "", false, false)
+	strings.write_string(&builder, "</nav></aside><article class=\"reference builtin-reference\"><nav class=\"breadcrumb\" aria-label=\"Breadcrumb\"><a href=\"")
+	html_attr(&builder, package_href_from(page_path, path_join({output_root, "index.html"}), ""))
+	strings.write_string(&builder, "\">Packages</a> / Odin built-in types</nav><header class=\"package-heading\"><p class=\"package-path\">renderer reference</p><h1>Odin built-in types</h1><p>Foundational Odin type names resolved by Varde only when this documentation set has no matching declaration.</p></header><section class=\"entry-group\" aria-labelledby=\"builtin-types-heading\"><header class=\"entry-group-heading\"><h2 id=\"builtin-types-heading\">Types</h2><span class=\"entry-group-count\">")
+	write_grouped_count(&builder, len(ODIN_BUILTIN_TYPES))
+	strings.write_string(&builder, "</span></header>")
+	for builtin in ODIN_BUILTIN_TYPES {
+		strings.write_string(&builder, "<article class=\"symbol builtin-symbol\" id=\"builtin-")
+		html_attr(&builder, builtin.name)
+		strings.write_string(&builder, "\"><header class=\"symbol-heading\"><h3><a class=\"symbol-name\" href=\"#builtin-")
+		html_attr(&builder, builtin.name)
+		strings.write_string(&builder, "\">")
+		html_text(&builder, builtin.name)
+		strings.write_string(&builder, "</a><span class=\"kind\">Odin built-in</span></h3></header><p class=\"summary\">")
+		html_text(&builder, builtin.description)
+		strings.write_string(&builder, "</p><p class=\"builtin-category\">")
+		html_text(&builder, builtin.category)
+		strings.write_string(&builder, "</p></article>")
+	}
+	strings.write_string(&builder, "</section></article><aside class=\"package-toc\"><nav aria-label=\"On this page\"><p class=\"toc-title\">On this page</p><a href=\"#main\">Overview</a><a href=\"#builtin-types-heading\">Types</a></nav></aside></main>")
 	site_footer(&builder, assets_relative, extensions)
 	return write_text_file(page_path, &builder)
 }
@@ -1546,6 +1689,7 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 	strings.write_string(&css_builder, SITE_SCOPED_SCROLLBAR_CSS)
 	strings.write_string(&css_builder, "/* Package declarations are grouped by their public kind, then alphabetized. The index repeats that structure so it supports both quick group jumps and precise symbol navigation. */\n.entry-group{margin:30px 0 0;scroll-margin-top:88px}.entry-group-heading{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:0 0 9px;border-bottom:1px solid var(--line)}.entry-group-heading h2{margin:0;font-size:1.22rem;letter-spacing:-.02em}.entry-group-count{color:var(--muted);font-size:.78rem;font-weight:700;font-variant-numeric:tabular-nums}.entry-group .symbol:first-of-type{padding-top:17px}.toc-jumps{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 14px}.toc-jumps a{padding:3px 6px!important;border:1px solid var(--line);border-radius:999px;background:var(--surface-raised);font-size:.72rem;line-height:1.25}.toc-group{padding:8px 0 0;border-top:1px solid color-mix(in srgb,var(--line) 72%,transparent)}.toc-group-link{display:flex!important;align-items:baseline;justify-content:space-between;gap:8px;color:var(--text)!important;font-size:.77rem;font-weight:750}.toc-group-link span{color:var(--muted);font-size:.7rem;font-variant-numeric:tabular-nums}.toc-group-link[data-active=\"true\"]{color:var(--accent)!important}.toc-group[data-active=\"true\"]{border-color:color-mix(in srgb,var(--accent) 58%,var(--line))}.toc-entries{margin-top:3px}.toc-group .toc-entry{padding:2px 0 2px 9px}.toc-entry[data-active=\"true\"]{color:var(--accent);font-weight:700;border-left:2px solid var(--accent);margin-left:-19px;padding-left:26px}.toc-entry[data-active=\"true\"]:not(:focus-visible){background:color-mix(in srgb,var(--accent) 8%,transparent)}\n")
 	strings.write_string(&css_builder, ".source-link{margin-left:auto;color:var(--muted);font-size:.78rem;font-weight:650;text-decoration:none}.source-link:hover{color:var(--accent);text-decoration:underline}.tok-keyword{color:#b23b7d;font-weight:650}.tok-literal{color:#9c5b16}.tok-operator{color:#62756a}.tok-comment{color:var(--muted);font-style:italic}.tok-directive{color:#6b56bb}.tok-invalid{color:#c43d3d;text-decoration:underline}.tok-link{color:#2776c4;text-decoration:none;font-weight:650}.tok-link:hover{text-decoration:underline}:root[data-theme=\"dark\"] .tok-keyword{color:#f08bb8}:root[data-theme=\"dark\"] .tok-literal{color:#f0ba6a}:root[data-theme=\"dark\"] .tok-operator{color:#b6c8ba}:root[data-theme=\"dark\"] .tok-directive{color:#c3b2ff}:root[data-theme=\"dark\"] .tok-link{color:#8ec5ff}\n")
+	strings.write_string(&css_builder, ".tok-builtin{color:#8b5a00;text-decoration-style:dotted;text-underline-offset:3px}.tok-unresolved{color:color-mix(in srgb,var(--muted) 92%,var(--text));text-decoration:underline dotted;text-underline-offset:3px}:root[data-theme=\"dark\"] .tok-builtin{color:#f0c36a}.builtin-reference .package-heading>p:last-child{max-width:68ch;margin:11px 0 0;color:var(--muted)}.builtin-symbol .summary{margin-bottom:3px}.builtin-category{margin:0;color:var(--muted);font-size:.8rem;text-transform:capitalize}\n")
 	strings.write_string(&css_builder, ".reference-layout{width:100%;max-width:none!important;grid-template-columns:minmax(220px,1fr) minmax(0,960px) minmax(200px,1fr)!important;column-gap:clamp(28px,3vw,56px);align-items:start;padding:32px clamp(24px,4vw,72px) 96px}.reference-layout .reference{width:100%;max-width:960px;justify-self:center}.package-explorer{position:sticky;top:92px;justify-self:start;width:min(100%,260px);max-height:calc(100vh - 112px);overflow:auto;padding-right:16px;border-right:1px solid var(--line);font-size:.84rem;line-height:1.32}.package-toc{justify-self:end;width:min(100%,240px)}.explorer-title{margin:0 0 8px;font-weight:750;color:var(--text)}.package-tree,.package-tree ul{list-style:none;margin:0;padding:0}.package-tree ul{margin:2px 0 2px 7px;padding-left:12px;border-left:1px solid color-mix(in srgb,var(--line) 85%,transparent)}.package-tree li{margin:1px 0}.tree-package,.tree-folder{display:block;min-width:0;padding:5px 7px;border-radius:5px}.tree-package{color:var(--text);text-decoration:none}.tree-package:hover,.tree-package:focus-visible{background:var(--surface-raised);color:var(--accent);outline:0}.tree-package.is-active{background:color-mix(in srgb,var(--accent) 12%,var(--surface));color:var(--accent);font-weight:700}.tree-folder{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.79rem}.tree-name,.tree-meta{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tree-meta{margin-top:1px;color:var(--muted);font-size:.75rem;font-weight:400}.home-insights{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:34px 0}.home-insights article{padding:16px 17px;background:var(--surface);border:1px solid var(--line);border-radius:8px}.home-insights h2{margin:2px 0 5px;font-size:1rem;letter-spacing:-.015em}.home-insights p:last-child{margin:0;color:var(--muted);font-size:.87rem;line-height:1.45}.home .package-tree{padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:8px}.home .package-tree .tree-package{padding:8px 10px}.home .package-tree .tree-package:hover{background:var(--surface-raised)}.symbol h3 .kind{display:inline-block;vertical-align:middle;margin:0 0 0 9px;padding:2px 7px;border:1px solid var(--line);border-radius:999px;background:var(--surface-raised);font-size:.66rem;line-height:1.25;letter-spacing:.06em}.reference-layout+footer{max-width:none;padding-left:clamp(24px,4vw,72px);padding-right:clamp(24px,4vw,72px)}@media(max-width:1320px){.reference-layout{grid-template-columns:minmax(0,960px) 218px!important;justify-content:center}.package-explorer{display:none}}@media(max-width:980px){.reference-layout{display:block!important;max-width:980px!important}.package-toc{display:none}}@media(max-width:760px){.home-insights{grid-template-columns:1fr}.home-insights article{padding:14px}}@media(max-width:620px){.source-link{margin:5px 0 0;display:inline-block}.symbol h3 .kind{margin:5px 0 0;vertical-align:baseline}}\n")
 	strings.write_string(&css_builder, "/* The reference canvas stays fluid: side rails occupy the edges while the documentation expands through the center. The homepage retains a focused reading width. */\nmain.home{width:100%;max-width:1080px;padding:52px clamp(24px,4vw,72px) 96px}.home .hero,.home .metrics{max-width:960px;margin-left:auto;margin-right:auto}.home .package-directory{width:100%;max-width:none}.reference-layout{grid-template-columns:minmax(190px,250px) minmax(0,1fr) minmax(190px,250px)!important;column-gap:clamp(24px,3vw,48px)}.reference-layout .reference{max-width:none}.package-explorer,.package-toc{display:block;width:100%}@media(max-width:1120px){.reference-layout{grid-template-columns:minmax(0,1fr) 218px!important;justify-content:center}.package-explorer{display:none}}\n")
 	strings.write_string(&css_builder, "/* Search is a fixed reference tool: header and query controls stay in view while only results scroll. */\ndialog{width:min(820px,94vw);max-height:86vh;overflow:hidden}.search-dialog{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;max-height:min(760px,86vh);padding:0;overflow:hidden;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:0 28px 80px color-mix(in srgb,#000 34%,transparent)}.search-dialog-header{padding:20px 24px 14px;border-bottom:1px solid var(--line);align-items:center}.search-dialog-header h2{font-size:1.35rem}.search-dialog-header button{border-color:transparent;background:transparent;color:var(--muted)}.search-dialog-header button:hover{color:var(--text);background:var(--surface-raised);border-color:var(--line)}.search-controls{padding:14px 24px 9px;border-bottom:1px solid var(--line)}.search-dialog input{margin:0;padding:12px 14px;border-radius:7px;background:var(--bg)}.search-summary{min-height:1.35em;margin:7px 1px 0;font-size:.8rem}.search-results-scroll{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:7px 10px 10px}.search-result{grid-template-columns:minmax(0,1fr) auto;column-gap:10px;align-items:center;padding:10px 12px;border-radius:7px}.search-result strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.95rem}.search-kind{grid-column:2;grid-row:1;align-self:center;padding:2px 7px;border:1px solid var(--line);border-radius:999px;background:var(--surface-raised);color:var(--muted);font-size:.66rem;font-weight:750;letter-spacing:.055em;line-height:1.35;text-transform:uppercase}.search-result small{grid-column:1 / -1;margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.75rem;line-height:1.35}.search-hint{max-width:none;display:flex;gap:14px;margin:0;padding:11px 24px;border-top:1px solid var(--line);font-size:.76rem}.search-hint span{display:inline-flex;align-items:center;gap:3px}@media(max-width:620px){dialog{width:calc(100vw - 20px);max-height:calc(100vh - 20px)}.search-dialog{max-height:calc(100vh - 20px)}.search-dialog-header{padding:16px 18px 12px}.search-controls{padding:12px 18px 8px}.search-hint{gap:9px;padding:10px 18px;font-size:.71rem}.search-result{grid-template-columns:minmax(0,1fr) auto}.search-kind{display:block}.search-result small{grid-column:1 / -1}}\n")
@@ -1560,6 +1704,9 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 	strings.write_string(&css_builder, "#settings-dialog{width:min(470px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);margin:auto;padding:0;border:0;background:transparent;color:var(--text)}#settings-dialog .settings-dialog{width:100%;max-width:none}\n")
 	strings.write_string(&css_builder, SITE_REFERENCE_WIDTH_CSS)
 	strings.write_string(&css_builder, SITE_THEME_PRESETS_CSS)
+	// This comes after the theme presets so built-ins remain visibly distinct
+	// from ordinary declaration links under every reader-selected palette.
+	strings.write_string(&css_builder, ":root[data-theme=\"odin-light\"] .tok-link.tok-builtin{color:#9a6700}:root[data-theme=\"monokai\"] .tok-link.tok-builtin{color:#fd971f}:root[data-theme=\"github-light\"] .tok-link.tok-builtin{color:#8250df}:root[data-theme=\"tokyo-night\"] .tok-link.tok-builtin{color:#e0af68}\n")
 	if err := write_text_file(css_path, &css_builder); len(err) > 0 do return err
 	js_builder: strings.Builder
 	defer strings.builder_destroy(&js_builder)
@@ -1607,6 +1754,17 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 				)
 			}
 		}
+	}
+	for builtin in ODIN_BUILTIN_TYPES {
+		first = search_index_entry_write(
+			&builder,
+			builtin.name,
+			"Odin Built-in Type",
+			builtin.category,
+			strings.concatenate({"builtin-types/#builtin-", builtin.name}, context.temp_allocator),
+			strings.concatenate({builtin.name, " ", builtin.category, " ", builtin.description}, context.temp_allocator),
+			first,
+		)
 	}
 	strings.write_string(&builder, "];\n")
 	index_path := path_join({output_root, "assets", "search-index.js"})
@@ -1679,6 +1837,7 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 		index_config.include_brand_artwork = false
 	}
 	if err := write_index_page(model, index_config, extensions, staging); len(err) > 0 { result.error_message = err; return result }
+	if err := write_builtin_types_page(model, config, extensions, staging); len(err) > 0 { result.error_message = err; return result }
 	for &pkg in model.packages {
 		if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }
 		if !site_package_is_renderable(pkg) do continue
@@ -1911,6 +2070,12 @@ test_internal_links_resolve_only_local_or_imported_targets :: proc(t: ^testing.T
 	defer strings.builder_destroy(&field_code)
 	write_odin_code(&field_code, "Worker :: struct { init: proc(), value: Local }", ctx)
 	testing.expect(t, !strings.contains(strings.to_string(field_code), "href=\"#init\""), "struct field labels must not link to same-named package declarations")
+	builtin_code: strings.Builder
+	defer strings.builder_destroy(&builtin_code)
+	write_odin_code(&builtin_code, "record: i32, missing: Not_Documented", ctx)
+	builtin_rendered := strings.to_string(builtin_code)
+	testing.expect(t, strings.contains(builtin_rendered, "tok-builtin") && strings.contains(builtin_rendered, "builtin-types/#builtin-i32") && strings.contains(builtin_rendered, "Odin built-in type"), "built-in types should resolve through the renderer-owned reference page")
+	testing.expect(t, strings.contains(builtin_rendered, "tok-unresolved") && strings.contains(builtin_rendered, "Not_Documented") && strings.contains(builtin_rendered, "no matching declaration is present"), "missing references should retain their names with an explanatory treatment")
 }
 
 @(test)
@@ -1955,6 +2120,7 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	site_root := path_join({root, config.output_dir})
 	index := path_join({site_root, "index.html"})
 	package_page := path_join({site_root, "packages", "core", "demo", "index.html"})
+	builtin_page := path_join({site_root, BUILTIN_TYPES_PAGE_PATH})
 	search_index := path_join({site_root, "assets", "search-index.js"})
 	overrides_path := path_join({site_root, "assets", SITE_OVERRIDES_CSS_FILE_NAME})
 	testing.expect(t, os.exists(index), "site index should be generated")
@@ -1979,12 +2145,14 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	testing.expect(t, index_read_err == nil && strings.contains(string(index_data), "id=\"settings-dialog\"") && strings.contains(string(index_data), "id=\"site-settings\"") && strings.contains(string(index_data), "name=\"systemLightTheme\"") && strings.contains(string(index_data), "name=\"systemDarkTheme\""), "generated sites should expose persistent reader settings and system theme variants")
 	testing.expect(t, index_read_err == nil && strings.contains(string(index_data), "demo-extension") && strings.contains(string(index_data), "before-content") && strings.contains(string(index_data), "after-content"), "configured trusted HTML insertion points should be emitted")
 	testing.expect(t, os.exists(package_page), "package page should be generated")
+	testing.expect(t, os.exists(builtin_page), "the renderer-owned built-in type reference should be generated")
 	overrides_data, overrides_read_err := os.read_entire_file(overrides_path, context.temp_allocator)
 	testing.expect(t, overrides_read_err == nil && strings.contains(string(overrides_data), "Varde loads this stylesheet after assets/site.css"), "a documented stylesheet override file should be generated")
 	data, read_err := os.read_entire_file(search_index, context.temp_allocator)
 	testing.expect(t, read_err == nil && strings.contains(string(data), "hello"), "offline search index should include symbols")
 	testing.expect(t, read_err == nil && strings.contains(string(data), "packages/core/demo/#hello") && !strings.contains(string(data), "index.html#"), "search links should use canonical package-directory URLs")
 	testing.expect(t, read_err == nil && strings.contains(string(data), "kind"), "offline search index should label result kinds")
+	testing.expect(t, read_err == nil && strings.contains(string(data), "Odin Built-in Type") && strings.contains(string(data), "builtin-types/#builtin-int"), "offline search should include renderer-owned built-in type references")
 	testing.expect(t, read_err == nil && !strings.contains(string(data), "%!(MISSING"), "search index should be valid JavaScript object syntax")
 	page_data, page_read_err := os.read_entire_file(package_page, context.temp_allocator)
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "data-site-root=\"../../../\""), "package documents should provide a root-relative search base")
@@ -1999,7 +2167,10 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	testing.expect(t, page_read_err == nil && !strings.contains(string(page_data), root), "package pages should not expose absolute workspace paths")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "<table class=\"doc-table\">"), "documentation tables should render as semantic HTML tables")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"symbol-heading\""), "package pages should use compact declaration headings")
+	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "tok-builtin") && strings.contains(string(page_data), "builtin-types/#builtin-int"), "rendered signatures should link foundational types to the local built-in reference")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "https://example.test/demo/blob/main/demo.odin#L7"), "enabled source links should point to repository files and lines")
+	builtin_data, builtin_read_err := os.read_entire_file(builtin_page, context.temp_allocator)
+	testing.expect(t, builtin_read_err == nil && strings.contains(string(builtin_data), "Odin built-in types") && strings.contains(string(builtin_data), "id=\"builtin-int\""), "the built-in page should explain each renderer-owned type target")
 	manifest_path := path_join({site_root, SITE_MANIFEST_FILE_NAME})
 	manifest_data, manifest_read_err := os.read_entire_file(manifest_path, context.temp_allocator)
 	testing.expect(t, manifest_read_err == nil && strings.contains(string(manifest_data), "\"source_links\": true"), "manifest should report when source links were emitted")
@@ -2016,6 +2187,7 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	if index_read_err == nil do delete(index_data, context.temp_allocator)
 	if overrides_read_err == nil do delete(overrides_data, context.temp_allocator)
 	if page_read_err == nil do delete(page_data, context.temp_allocator)
+	if builtin_read_err == nil do delete(builtin_data, context.temp_allocator)
 	if manifest_read_err == nil do delete(manifest_data, context.temp_allocator)
 	if preserved_read_err == nil do delete(preserved_overrides, context.temp_allocator)
 }

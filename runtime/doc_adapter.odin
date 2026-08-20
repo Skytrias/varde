@@ -148,6 +148,18 @@ test_document_signature_budget_truncates_unbounded_input :: proc(t: ^testing.T) 
 	testing.expect(t, strings.to_string(builder) == "a…" && budget.truncated, "signature rendering should stop at its display budget")
 }
 
+@(test)
+test_document_signature_keeps_named_types_at_depth_limit :: proc(t: ^testing.T) {
+	document := doc.Document_Init()
+	defer doc.Document_Destroy(&document)
+	append(&document.types, doc.Type{kind = 1, name = "Known_Type"})
+	builder: strings.Builder
+	defer strings.builder_destroy(&builder)
+	budget := Document_Signature_Budget{remaining = 64}
+	document_append_type(&builder, &budget, &document, 1, 4, 0)
+	testing.expect(t, strings.to_string(builder) == "Known_Type", "a known type name should remain readable at the structural depth limit")
+}
+
 document_signature_indent :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, indent: int) {
 	for _ in 0..<indent do document_signature_write(builder, budget, "\t")
 }
@@ -291,11 +303,16 @@ document_append_type_child :: proc(builder: ^strings.Builder, budget: ^Document_
 document_append_type :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, document: ^doc.Document, type_index: u32, depth, indent: int) {
 	if budget.truncated do return
 	if document == nil || type_index == 0 || int(type_index) >= len(document.types) { document_signature_write(builder, budget, "_"); return }
+	typ := document.types[type_index]
 	// Anonymous structural types can recursively embed other anonymous types.
 	// Keep signatures finite and fast for large public APIs while retaining the
 	// first several semantic layers that a reader needs to understand a type.
-	if depth > 3 { document_signature_write(builder, budget, "…"); return }
-	typ := document.types[type_index]
+	// A named node still conveys a real reference, so retain it rather than
+	// replacing a known identifier with a display-only ellipsis.
+	if depth > 3 {
+		if len(typ.name) > 0 { document_signature_write(builder, budget, typ.name) } else { document_signature_write(builder, budget, "…") }
+		return
+	}
 	switch typ.kind {
 	case 1, 2, 3:
 		if len(typ.name) > 0 { document_signature_write(builder, budget, typ.name) } else { document_signature_write(builder, budget, "_") }

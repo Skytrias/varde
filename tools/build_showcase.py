@@ -20,6 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "showcase" / "catalog"
+PROJECT_CONFIGS = ROOT / "examples" / "project-configs"
 
 
 @dataclass(frozen=True)
@@ -81,37 +82,75 @@ def blob_prefix(repo: Repository) -> str:
     return f"{repo.url.removesuffix('.git')}/blob/{repo.commit}"
 
 
-def build_source_site(varde: Path, workspace: Path, destination: Path) -> None:
-    """Build one showcase entry exclusively through Varde source mode."""
+def load_project_definition(path: Path) -> dict[str, object]:
+    """Read the reviewed portable definition used by one showcase project."""
+    if not path.is_file():
+        raise RuntimeError(f"project definition is missing: {path}")
+    try:
+        definition = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"project definition is invalid JSON: {path}: {error}") from error
+    if not isinstance(definition, dict) or definition.get("schema_version") != 7:
+        raise RuntimeError(f"project definition must use schema version 7: {path}")
+    if not isinstance(definition.get("title"), str) or not definition["title"]:
+        raise RuntimeError(f"project definition must provide a title: {path}")
+    return definition
+
+
+def project_definition_path(repo: Repository) -> Path:
+    path = PROJECT_CONFIGS / f"{repo.slug}.varde.json"
+    definition = load_project_definition(path)
+    source = definition.get("source")
+    if not isinstance(source, dict) or not isinstance(source.get("roots"), list) or not source["roots"]:
+        raise RuntimeError(f"project definition must select source.roots: {path}")
+    if not all(isinstance(root, str) and root for root in source["roots"]):
+        raise RuntimeError(f"project definition has invalid source.roots: {path}")
+    if definition.get("source_url_prefix") != blob_prefix(repo):
+        raise RuntimeError(f"project definition must link to the pinned revision: {path}")
+    return path
+
+
+def build_source_site(varde: Path, workspace: Path, destination: Path, definition_path: Path) -> None:
+    """Build one showcase entry exclusively through Varde source mode and its reviewed definition."""
     relative_output = ".varde-showcase"
     generated = workspace / relative_output
     if generated.exists():
         raise RuntimeError(f"refusing to replace existing generated site: {generated}")
+    definition = load_project_definition(definition_path)
     # The public showcase intentionally demonstrates Varde's compiler-free,
     # incomplete source path. It must not invoke `odin doc` or depend on a
     # project's native build prerequisites.
-    command = [str(varde), "build", "--source", ".", "--allow-incomplete", "--out", relative_output]
+    command = [
+        str(varde), "build", "--source", ".", "--config", str(definition_path),
+        "--allow-incomplete", "--out", relative_output,
+    ]
     run(command, cwd=workspace)
+    manifest_path = generated / "varde-site-manifest.json"
+    if not manifest_path.is_file():
+        raise RuntimeError(f"Varde did not produce a site manifest for {definition_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("title") != definition["title"]:
+        raise RuntimeError(f"Varde did not apply project definition {definition_path}")
     shutil.copytree(generated, destination)
 
 
-def configure_site(workspace: Path, name: str, repo: Repository, *, workspace_packages_only: bool = False) -> None:
-    config_path = workspace / "varde.json"
-    if config_path.exists():
-        raise RuntimeError(f"refusing to replace project configuration: {config_path}")
-    title = f"{name[:1].upper()}{name[1:]} Documentation"
-    config_path.write_text(json.dumps({
-        "schema_version": 5,
-        "title": title,
-        "workspace_packages_only": workspace_packages_only,
+def write_varde_definition(destination: Path, repo: Repository) -> Path:
+    """Create an attached definition for Varde's disposable showcase checkout."""
+    if destination.exists():
+        raise RuntimeError(f"refusing to replace project definition: {destination}")
+    destination.write_text(json.dumps({
+        "schema_version": 7,
+        "title": "Varde Documentation",
+        "description": "Offline API reference for Varde.",
         "include_source_links": True,
         "source_url_prefix": blob_prefix(repo),
     }) + "\n", encoding="utf-8")
+    load_project_definition(destination)
+    return destination
 
 
 def build_odin(varde: Path, source: Path, destination: Path) -> None:
-    configure_site(source, "odin", ODIN)
-    build_source_site(varde, source, destination)
+    build_source_site(varde, source, destination, project_definition_path(ODIN))
 
 
 def build_varde(varde: Path, workspace: Path, destination: Path, repository: Repository) -> None:
@@ -123,23 +162,20 @@ def build_varde(varde: Path, workspace: Path, destination: Path, repository: Rep
             ".git", ".varde-*", "dist", "docs", "odin", "__pycache__", ".DS_Store"
         ),
     )
-    configure_site(workspace, "varde", repository)
-    build_source_site(varde, workspace, destination)
+    definition = write_varde_definition(workspace.parent / "varde.varde.json", repository)
+    build_source_site(varde, workspace, destination, definition)
 
 
 def build_karl2d(varde: Path, source: Path, destination: Path) -> None:
-    configure_site(source, "karl2d", KARL2D, workspace_packages_only=True)
-    build_source_site(varde, source, destination)
+    build_source_site(varde, source, destination, project_definition_path(KARL2D))
 
 
 def build_muninn(varde: Path, source: Path, destination: Path) -> None:
-    configure_site(source, "muninn", MUNINN, workspace_packages_only=True)
-    build_source_site(varde, source, destination)
+    build_source_site(varde, source, destination, project_definition_path(MUNINN))
 
 
 def build_sokol_odin(varde: Path, source: Path, destination: Path) -> None:
-    configure_site(source, "sokol-odin", SOKOL_ODIN, workspace_packages_only=True)
-    build_source_site(varde, source, destination)
+    build_source_site(varde, source, destination, project_definition_path(SOKOL_ODIN))
 
 
 def main() -> int:

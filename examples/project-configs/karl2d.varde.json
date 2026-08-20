@@ -2,6 +2,8 @@
   "schema_version": 7,
   "title": "Karl 2D Documentation",
   "description": "Offline API reference for Karl 2D.",
+  "include_source_links": true,
+  "source_url_prefix": "https://github.com/karl-zylinski/karl2d/blob/9455eefd29f04c65869497dc89755d7897d5a66b",
   "source": {
     "roots": ["karl2d"]
   }

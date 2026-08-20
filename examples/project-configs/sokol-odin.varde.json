@@ -2,6 +2,8 @@
   "schema_version": 7,
   "title": "sokol-odin Documentation",
   "description": "Offline API reference for sokol-odin.",
+  "include_source_links": true,
+  "source_url_prefix": "https://github.com/floooh/sokol-odin/blob/2b504f453c8ab0c0d1cd746ba6eace08e5ad9bac",
   "source": {
     "roots": ["sokol"]
   }

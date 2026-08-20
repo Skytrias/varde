@@ -40,3 +40,14 @@ jobs:
           ./dist/varde build --source . --allow-incomplete --out _ci-site
           test -f _ci-site/index.html
           test -f _ci-site/varde-site-manifest.json
+
+      - name: Validate portable showcase project definitions
+        run: |
+          set -euo pipefail
+          for definition in examples/project-configs/*.varde.json; do
+            python3 -m json.tool "$definition" >/dev/null
+          done
+          grep -F '"roots": ["core"]' examples/project-configs/odin.varde.json
+          grep -F '"roots": ["karl2d"]' examples/project-configs/karl2d.varde.json
+          grep -F '"roots": ["ecs"]' examples/project-configs/muninn.varde.json
+          grep -F '"roots": ["sokol"]' examples/project-configs/sokol-odin.varde.json

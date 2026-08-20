@@ -52,9 +52,14 @@ jobs:
           test -f _site/projects/varde/index.html
           test ! -e _site/projects/varde/odin
           test -f _site/projects/odin/index.html
+          grep -F '"title": "Odin Documentation"' _site/projects/odin/varde-site-manifest.json
+          ! grep -F 'examples/' _site/projects/odin/assets/search-index.js
           test -f _site/projects/karl2d/index.html
+          grep -F '"title": "Karl 2D Documentation"' _site/projects/karl2d/varde-site-manifest.json
           test -f _site/projects/muninn/index.html
+          grep -F '"title": "Muninn Documentation"' _site/projects/muninn/varde-site-manifest.json
           test -f _site/projects/sokol-odin/index.html
+          grep -F '"title": "sokol-odin Documentation"' _site/projects/sokol-odin/varde-site-manifest.json
 
       # This makes the executable available for troubleshooting or manual
       # testing. It is intentionally not a release asset or supported binary.

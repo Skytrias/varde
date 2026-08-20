@@ -2,6 +2,8 @@
   "schema_version": 7,
   "title": "Muninn Documentation",
   "description": "Offline API reference for Muninn.",
+  "include_source_links": true,
+  "source_url_prefix": "https://github.com/GuilHartt/muninn/blob/7f11f779b54f8cfa8a78b7f2a01abc374e249af5",
   "source": {
     "roots": ["ecs"]
   }
