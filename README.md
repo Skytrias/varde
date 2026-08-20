@@ -105,7 +105,7 @@ selects the public library surface and supplies the homepage metadata:
 
 ```json
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "title": "Odin Documentation",
   "description": "Offline API reference for Odin.",
   "source": { "roots": ["core", "base", "vendor"] },
@@ -120,9 +120,13 @@ selects the public library surface and supplies the homepage metadata:
 Place this in the source repository as `varde.json`, or keep it separately and
 pass it with `--config path/to/project.varde.json`. Selected roots are always
 relative to `--source`; they must be direct children of that checkout, with no
-globs or escape paths. This makes `"roots": ["karl2d"]`,
-`["ecs"]`, and `["sokol"]` direct definitions for Karl 2D, Muninn, and
-sokol-odin.
+globs or escape paths. This makes `"roots": ["ecs"]` and `["sokol"]`
+direct definitions for Muninn and sokol-odin.
+
+For a flat library such as Karl 2D—whose public package files are at the
+repository root—use `"roots": ["."]` with `"root_files_only": true`.
+That includes only root-level `.odin` files and does not recurse into example,
+test, or tooling directories.
 
 `homepage.content_file` is optional project-authored prose rendered with
 Varde's safe documentation markup—no HTML or scripts are inserted. The

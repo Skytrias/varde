@@ -1,5 +1,5 @@
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "title": "Muninn Documentation",
   "description": "Offline API reference for Muninn.",
   "include_source_links": true,

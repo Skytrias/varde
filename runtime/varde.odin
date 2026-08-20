@@ -21,7 +21,7 @@ SITE_LEGACY_CONFIG_FILE_NAME :: "vigil-site.json"
 SITE_MANIFEST_FILE_NAME :: "varde-site-manifest.json"
 SITE_LEGACY_MANIFEST_FILE_NAME :: "vigil-site-manifest.json"
 SITE_OVERRIDES_CSS_FILE_NAME :: "overrides.css"
-SITE_SCHEMA_VERSION :: 7
+SITE_SCHEMA_VERSION :: 8
 BUILTIN_TYPES_PAGE_PATH :: "builtin-types/index.html"
 
 THEME_ODIN_LIGHT :: "odin-light"
@@ -40,7 +40,8 @@ SITE_OVERRIDES_CSS :: `/*
 `
 
 Source_Config :: struct {
-	roots: [dynamic]string `json:"roots"`,
+	roots:           [dynamic]string `json:"roots"`,
+	root_files_only: bool             `json:"root_files_only"`,
 }
 
 Homepage_Config :: struct {
@@ -217,6 +218,14 @@ source_roots_validate :: proc(roots: []string) -> string {
 		if clean == "." && len(roots) != 1 do return "source.roots may use `.` only by itself"
 		for prior in seen do if prior == clean do return fmt.tprintf("source.roots[%d] duplicates %q", index, clean)
 		append(&seen, clean)
+	}
+	return ""
+}
+
+source_config_validate :: proc(source: Source_Config) -> string {
+	if roots_err := source_roots_validate(source.roots[:]); len(roots_err) > 0 do return roots_err
+	if source.root_files_only && (len(source.roots) != 1 || source.roots[0] != ".") {
+		return "source.root_files_only requires source.roots to be exactly [\".\"]"
 	}
 	return ""
 }

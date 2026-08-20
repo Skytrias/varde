@@ -90,8 +90,8 @@ def load_project_definition(path: Path) -> dict[str, object]:
         definition = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise RuntimeError(f"project definition is invalid JSON: {path}: {error}") from error
-    if not isinstance(definition, dict) or definition.get("schema_version") != 7:
-        raise RuntimeError(f"project definition must use schema version 7: {path}")
+    if not isinstance(definition, dict) or definition.get("schema_version") != 8:
+        raise RuntimeError(f"project definition must use schema version 8: {path}")
     if not isinstance(definition.get("title"), str) or not definition["title"]:
         raise RuntimeError(f"project definition must provide a title: {path}")
     return definition
@@ -139,7 +139,7 @@ def write_varde_definition(destination: Path, repo: Repository) -> Path:
     if destination.exists():
         raise RuntimeError(f"refusing to replace project definition: {destination}")
     destination.write_text(json.dumps({
-        "schema_version": 7,
+        "schema_version": 8,
         "title": "Varde Documentation",
         "description": "Offline API reference for Varde.",
         "include_source_links": True,

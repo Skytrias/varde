@@ -14,6 +14,7 @@ import "core:strings"
 Config :: struct {
 	root_path:       string,
 	source_roots:    []string,
+	root_files_only: bool,
 	target_os:       string,
 	target_arch:     string,
 	include_test_files: bool,
@@ -596,6 +597,7 @@ Extract :: proc(config: Config, allocator: mem.Allocator = context.allocator) ->
 		w := os.walker_create(selected_root)
 		for info in os.walker_walk(&w) {
 			if path, err := os.walker_error(&w); err != nil { add_diagnostic(&workspace, .Discovery, path, 0, 0, "could not traverse source path", allocator); continue }
+			if config.root_files_only && info.type == .Directory { os.walker_skip_dir(&w); continue }
 			if info.type == .Directory && is_skipped_directory(info.name) { os.walker_skip_dir(&w); continue }
 			if info.type == .Regular && strings.has_suffix(info.name, ".odin") && source_file_matches_target(info.name, target_os, target_arch) do append(&paths, strings.clone(info.fullpath, allocator))
 		}

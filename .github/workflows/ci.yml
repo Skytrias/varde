@@ -48,6 +48,7 @@ jobs:
             python3 -m json.tool "$definition" >/dev/null
           done
           grep -F '"roots": ["core"]' examples/project-configs/odin.varde.json
-          grep -F '"roots": ["karl2d"]' examples/project-configs/karl2d.varde.json
+          grep -F '"roots": ["."]' examples/project-configs/karl2d.varde.json
+          grep -F '"root_files_only": true' examples/project-configs/karl2d.varde.json
           grep -F '"roots": ["ecs"]' examples/project-configs/muninn.varde.json
           grep -F '"roots": ["sokol"]' examples/project-configs/sokol-odin.varde.json

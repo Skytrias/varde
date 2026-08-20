@@ -303,6 +303,11 @@ Runtime_Build :: proc(request: Runtime_Build_Request, allocator: mem.Allocator =
 	}
 	defer if project_logo_loaded do delete(assets.brand_png, allocator)
 	if from_source {
+		if roots_err := source_config_validate(config.source); len(roots_err) > 0 {
+			runtime_result_error(&result, roots_err, allocator)
+			runtime_result_add_diagnostic(&result, .Configuration, request.project_config_path, 0, 0, roots_err, allocator)
+			return result
+		}
 		if roots_err := runtime_source_roots_validate(request.source_path, config.source.roots[:]); len(roots_err) > 0 {
 			runtime_result_error(&result, roots_err, allocator)
 			runtime_result_add_diagnostic(&result, .Configuration, request.project_config_path, 0, 0, roots_err, allocator)
@@ -311,6 +316,7 @@ Runtime_Build :: proc(request: Runtime_Build_Request, allocator: mem.Allocator =
 		source_workspace := extractor.Extract(extractor.Config{
 			root_path = request.source_path,
 			source_roots = config.source.roots[:],
+			root_files_only = config.source.root_files_only,
 			target_os = request.target_os,
 			target_arch = request.target_arch,
 			include_test_files = request.include_test_files,
@@ -447,7 +453,7 @@ test_runtime_build_uses_external_configured_source_roots :: proc(t: ^testing.T) 
 	logo_png := []u8{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
 	testing.expect(t, os.write_entire_file(path_join({config_root, "mark.png"}), logo_png) == nil, "homepage logo fixture should be writable")
 	config_file := path_join({config_root, "project.varde.json"})
-	testing.expect(t, os.write_entire_file(config_file, `{"schema_version":7,"title":"Core API","description":"Only the library surface.","source":{"roots":["core"]},"homepage":{"content_file":"overview.md","logo":"mark.png","logo_alt":"Core mark"}}`) == nil, "external project definition should be writable")
+	testing.expect(t, os.write_entire_file(config_file, `{"schema_version":8,"title":"Core API","description":"Only the library surface.","source":{"roots":["core"]},"homepage":{"content_file":"overview.md","logo":"mark.png","logo_alt":"Core mark"}}`) == nil, "external project definition should be writable")
 
 	result := Runtime_Build({
 		source_path = repository_root,
@@ -479,6 +485,18 @@ test_source_roots_validate_only_allows_repository_children :: proc(t: ^testing.T
 	testing.expect(t, len(source_roots_validate([]string{"nested/core"})) > 0, "nested source roots should be rejected")
 	testing.expect(t, len(source_roots_validate([]string{"../core"})) > 0, "upward source roots should be rejected")
 	testing.expect(t, len(source_roots_validate([]string{".", "core"})) > 0, "the whole repository root must be selected by itself")
+}
+
+@(test)
+test_source_config_validates_root_files_only_mode :: proc(t: ^testing.T) {
+	root_only := Source_Config{roots = make([dynamic]string, 0, 1, context.temp_allocator), root_files_only = true}
+	defer delete(root_only.roots)
+	append(&root_only.roots, ".")
+	testing.expect(t, len(source_config_validate(root_only)) == 0, "root-files-only mode should select the checkout root without recursing")
+	wrong_root := Source_Config{roots = make([dynamic]string, 0, 1, context.temp_allocator), root_files_only = true}
+	defer delete(wrong_root.roots)
+	append(&wrong_root.roots, "core")
+	testing.expect(t, len(source_config_validate(wrong_root)) > 0, "root-files-only mode should not be applied to a nested source root")
 }
 
 @(test)
