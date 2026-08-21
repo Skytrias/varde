@@ -1159,9 +1159,7 @@ write_package_entry :: proc(builder: ^strings.Builder, model: ^Model, package_co
 	html_attr(builder, entry.anchor)
 	strings.write_string(builder, "\">")
 	html_text(builder, entry.name)
-	strings.write_string(builder, "</a><span class=\"kind\">")
-	html_text(builder, entry_kind_singular(entry.kind))
-	strings.write_string(builder, "</span></h3>")
+	strings.write_string(builder, "</a></h3>")
 	if href, ok := source_href(config, model, entry^); ok {
 		strings.write_string(builder, "<a class=\"source-link\" href=\""); html_attr(builder, href); strings.write_string(builder, "\" rel=\"noreferrer noopener\" target=\"_blank\">Source</a>")
 	}
@@ -1287,7 +1285,7 @@ write_builtin_types_page :: proc(model: ^Model, config: Config, extensions: Site
 		html_attr(&builder, builtin.name)
 		strings.write_string(&builder, "\">")
 		html_text(&builder, builtin.name)
-		strings.write_string(&builder, "</a><span class=\"kind\">Odin built-in</span></h3></header><p class=\"summary\">")
+		strings.write_string(&builder, "</a></h3></header><p class=\"summary\">")
 		html_text(&builder, builtin.description)
 		strings.write_string(&builder, "</p><p class=\"builtin-category\">")
 		html_text(&builder, builtin.category)
@@ -1417,18 +1415,6 @@ write_grouped_count :: proc(builder: ^strings.Builder, count: int) {
 	for index in first_digit ..< len(text) {
 		if index > first_digit && (len(text) - index) % 3 == 0 do strings.write_rune(builder, ',')
 		strings.write_rune(builder, rune(text[index]))
-	}
-}
-
-entry_kind_singular :: proc(kind: string) -> string {
-	switch kind {
-	case "Procedures": return "Procedure"
-	case "Procedure Groups": return "Procedure Group"
-	case "Types": return "Type"
-	case "Variables": return "Variable"
-	case "Constants": return "Constant"
-	case "Config Values": return "Config Value"
-	case: return kind
 	}
 }
 
@@ -1607,6 +1593,7 @@ SITE_READER_REFINEMENT_CSS :: `
 body{font-size:16px;line-height:1.6;text-rendering:optimizeLegibility}.site-header{min-height:72px;background:color-mix(in srgb,var(--bg) 96%,transparent);backdrop-filter:blur(10px)}.brand{font-weight:780;letter-spacing:-.025em}.site-header #site-search{min-height:36px;gap:7px;padding:0 9px 0 11px;border:1px solid var(--accent);border-radius:7px;box-shadow:none;font-size:.88rem}.site-header #site-search:hover{background:color-mix(in srgb,var(--accent) 90%,#000);box-shadow:none;transform:translateY(-1px)}.site-header #site-search kbd{min-width:23px;padding:2px 4px;border-radius:3px}.site-header #site-settings{padding:7px 9px;border-color:transparent;background:transparent}.site-header #site-settings:hover{border-color:var(--line);background:var(--surface-raised);color:var(--text)}
 main.home{max-width:1120px;padding-top:clamp(56px,8vw,112px)}.home .hero{max-width:830px}.hero h1{max-width:15ch;font-size:4.5rem;letter-spacing:-.035em;line-height:.98;text-wrap:balance}.hero p{margin-top:1.15rem;font-size:1.08rem;line-height:1.65;text-wrap:pretty}.metrics{gap:0;margin:38px 0 58px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.metrics span,.kind{padding:9px 12px;border:0;border-radius:0;background:transparent;font-size:.78rem;font-variant-numeric:tabular-nums}.metrics span+span{border-left:1px solid var(--line)}.package-directory{margin-top:0}.section-heading{align-items:flex-end;margin-bottom:15px}.section-heading h2{font-size:1.5rem;letter-spacing:-.03em}.section-heading p{max-width:40ch;line-height:1.45}.home .package-tree{padding:0;border-width:1px 0;border-radius:0;background:transparent}.home .package-tree>li+li{border-top:1px solid var(--line)}.home .package-tree .tree-package{padding:14px 12px;border-radius:0}.home .package-tree .tree-package:hover{background:var(--surface-raised)}.home .package-tree .tree-meta{font-size:.78rem}.home .package-tree ul{margin-left:18px;padding-left:15px}.home .package-branch{margin:0}.home .package-branch>summary{border-radius:0}.home .package-branch>summary .tree-package,.home .package-branch>summary .tree-folder{padding-top:14px;padding-bottom:14px}
 .reference-layout{padding-top:clamp(30px,4vw,54px)}.reference-layout .reference{min-width:0;overflow-x:clip}.package-heading{padding:8px 0 25px}.package-heading h1{font-size:3.25rem;letter-spacing:-.035em;line-height:1.02;text-wrap:balance}.breadcrumb{font-size:.82rem}.package-heading .package-path{font-size:.78rem;letter-spacing:.01em}.entry-group{margin-top:38px}.entry-group-heading{padding-bottom:11px}.entry-group-heading h2{font-size:1.3rem;letter-spacing:-.025em}.symbol{padding:26px 0 28px}.symbol-heading{gap:10px}.symbol h3{font-size:1.3rem;letter-spacing:-.018em;overflow-wrap:anywhere}.symbol h3 .kind,.symbol .kind{margin-left:.55rem;padding:0;border:0;border-radius:0;background:transparent;color:var(--muted);font-size:.68rem;font-weight:760;letter-spacing:.075em}.symbol pre{margin-top:12px;padding:13px 16px;border-radius:4px;line-height:1.55;box-shadow:none}.symbol p{max-width:73ch;line-height:1.65;text-wrap:pretty}.package-explorer{padding-right:18px}.tree-package,.tree-folder{padding:5px 7px;border-radius:3px}.tree-package.is-active{background:color-mix(in srgb,var(--accent) 11%,var(--surface));color:var(--accent);font-weight:760}.package-toc{padding-left:20px;border-left:1px solid var(--line)}.toc-jumps{gap:0;margin:8px 0 15px}.toc-jumps a{padding:2px 7px!important;border:0;border-radius:0;background:transparent;color:var(--muted);font-size:.73rem;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--line) 80%,transparent);text-underline-offset:3px}.toc-jumps a:first-child{padding-left:0!important}.toc-jumps a:hover{color:var(--accent)}.toc-group{padding-top:10px}.toc-group .toc-entry{padding:3px 0 3px 9px}.toc-entry[data-active="true"]{margin-left:0;padding-left:9px;border-left:0;background:color-mix(in srgb,var(--accent) 11%,transparent);color:var(--accent);font-weight:750}.toc-entry[data-active="true"]:not(:focus-visible){background:color-mix(in srgb,var(--accent) 11%,transparent)}
+.reference-layout{padding-top:clamp(30px,4vw,54px)}.reference-layout .reference{min-width:0;overflow-x:clip}.package-heading{padding:8px 0 25px}.package-heading h1{font-size:3.25rem;letter-spacing:-.035em;line-height:1.02;text-wrap:balance}.breadcrumb{font-size:.82rem}.package-heading .package-path{font-size:.78rem;letter-spacing:.01em}.entry-group{margin-top:38px}.entry-group-heading{padding-bottom:11px}.entry-group-heading h2{font-size:1.3rem;letter-spacing:-.025em}.entry-group .symbol:first-of-type{padding-top:24px}.symbol{margin:0;padding:24px 0 0;border-bottom:0}.symbol+.symbol{margin-top:26px}.symbol-heading{gap:10px}.symbol h3{font-size:1.3rem;letter-spacing:-.018em;overflow-wrap:anywhere}.symbol pre{margin-top:12px;padding:13px 16px;border-radius:4px;line-height:1.55;box-shadow:none}.symbol p{max-width:73ch;line-height:1.65;text-wrap:pretty}.package-explorer{padding-right:18px}.tree-package,.tree-folder{padding:5px 7px;border-radius:3px}.tree-package.is-active{background:color-mix(in srgb,var(--accent) 11%,var(--surface));color:var(--accent);font-weight:760}.package-toc{padding-left:20px;border-left:1px solid var(--line)}.toc-jumps{gap:0;margin:8px 0 15px}.toc-jumps a{padding:2px 7px!important;border:0;border-radius:0;background:transparent;color:var(--muted);font-size:.73rem;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--line) 80%,transparent);text-underline-offset:3px}.toc-jumps a:first-child{padding-left:0!important}.toc-jumps a:hover{color:var(--accent)}.toc-group{padding-top:10px}.toc-group .toc-entry{padding:3px 0 3px 9px}.toc-entry[data-active="true"]{margin-left:0;padding-left:9px;border-left:0;background:color-mix(in srgb,var(--accent) 11%,transparent);color:var(--accent);font-weight:750}.toc-entry[data-active="true"]:not(:focus-visible){background:color-mix(in srgb,var(--accent) 11%,transparent)}
 .search-dialog,.settings-dialog{border-radius:9px;box-shadow:none}.search-result,.search-dialog input,.settings-form select{border-radius:4px}.search-kind{border-radius:3px}.settings-form fieldset{border-radius:4px}.search-dialog-header h2{letter-spacing:-.025em}.search-result[data-selected="true"]{background:color-mix(in srgb,var(--accent) 12%,var(--surface))}@media(max-width:760px){.hero h1{font-size:3.25rem}}@media(max-width:620px){.site-header{min-height:62px}.site-header #site-search{min-height:34px}.hero h1{font-size:2.75rem}.package-heading h1{font-size:2.5rem}.metrics{margin:30px 0 44px}.metrics span{padding:8px 9px;font-size:.72rem}.metrics span+span{border-left:0}.metrics span:nth-child(n+3){border-top:1px solid var(--line)}.metrics{display:grid;grid-template-columns:1fr 1fr}.section-heading p{margin-top:7px}.home .package-tree .tree-package{padding:13px 8px}.symbol{padding:22px 0}.symbol h3{font-size:1.2rem}.symbol pre{padding:11px 12px;font-size:.85rem}.package-heading{padding-bottom:20px}}
 @media(max-width:980px){.package-toc{display:none}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important}}
 `
@@ -2180,6 +2167,7 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "../../../assets/overrides.css"), "every page should load the optional override stylesheet after base styles")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"package-toc\""), "package pages should include a compact on-page index")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "id=\"group-types\"") && strings.contains(string(page_data), "id=\"group-procedure-groups\""), "package pages should group declarations by kind")
+	testing.expect(t, page_read_err == nil && !strings.contains(string(page_data), "class=\"kind\""), "group headings should establish declaration kind without repeating a per-symbol label")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"toc-group\" data-toc-group=\"group-types\"") && strings.contains(string(page_data), "class=\"toc-jumps\""), "the on-page index should offer grouped quick jumps")
 	alpha_index := strings.index(string(page_data), "id=\"Alpha\"")
 	zebra_index := strings.index(string(page_data), "id=\"Zebra\"")
