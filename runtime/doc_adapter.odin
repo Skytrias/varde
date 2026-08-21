@@ -103,6 +103,16 @@ document_type_at :: proc(document: ^doc.Document, typ: doc.Type, index: int) -> 
 	return typ.types[index]
 }
 
+// Source lowering records an untyped result so later analysis can reason about
+// constant expressions. It is useful semantic metadata, but not authored
+// declaration syntax: `answer :: 42` reads more faithfully than
+// `answer :: untyped integer = 42`.
+document_type_is_inferred_untyped :: proc(document: ^doc.Document, type_index: u32) -> bool {
+	if document == nil || type_index == 0 || int(type_index) >= len(document.types) do return false
+	typ := document.types[type_index]
+	return typ.kind == 1 && strings.has_prefix(typ.name, "untyped ")
+}
+
 // Keep one hostile declaration from amplifying an artifact indefinitely, but
 // leave enough room for ordinary records with field documentation.
 DOCUMENT_SIGNATURE_MAX_BYTES :: 16 * 1024
@@ -158,6 +168,17 @@ test_document_signature_keeps_named_types_at_depth_limit :: proc(t: ^testing.T) 
 	budget := Document_Signature_Budget{remaining = 64}
 	document_append_type(&builder, &budget, &document, 1, 4, 0)
 	testing.expect(t, strings.to_string(builder) == "Known_Type", "a known type name should remain readable at the structural depth limit")
+}
+
+@(test)
+test_document_signature_hides_inferred_untyped_constant_type :: proc(t: ^testing.T) {
+	document := doc.Document_Init()
+	defer doc.Document_Destroy(&document)
+	append(&document.types, doc.Type{kind = 1, name = "untyped integer", flags = 1 << 1})
+	constant := doc.Entity{kind = 1, name = "base_count", type = 1, init_string = "8"}
+	adapter := Document_Model{_owned_strings = make([dynamic]string, 0)}
+	defer Document_Model_Destroy(&adapter)
+	testing.expect(t, document_signature(&adapter, &document, constant, constant.name, context.allocator) == "base_count :: 8", "inferred untyped constant metadata should not appear in a display signature")
 }
 
 document_signature_indent :: proc(builder: ^strings.Builder, budget: ^Document_Signature_Budget, indent: int) {
@@ -424,16 +445,17 @@ document_signature :: proc(adapter: ^Document_Model, document: ^doc.Document, en
 			document_signature_write(&builder, &budget, entity.init_string)
 			break
 		}
-		if entity.kind == 3 && entity.type != 0 && int(entity.type) < len(document.types) && document.types[entity.type].kind == 2 && len(document.types[entity.type].types) > 0 {
+		hide_inferred_type := entity.kind != 3 && len(entity.init_string) > 0 && document_type_is_inferred_untyped(document, entity.type)
+		if !hide_inferred_type && entity.kind == 3 && entity.type != 0 && int(entity.type) < len(document.types) && document.types[entity.type].kind == 2 && len(document.types[entity.type].types) > 0 {
 			document_append_type(&builder, &budget, document, document.types[entity.type].types[0], 0, 0)
-		} else {
+		} else if !hide_inferred_type {
 			document_append_type(&builder, &budget, document, entity.type, 0, 0)
 		}
 		// Type entities use init_string as source provenance for direct aliases
 		// (handled above) and structural declarations. Their rendered type is the
 		// declaration itself, so adding an assignment here duplicates it.
 		if entity.kind != 3 && len(entity.init_string) > 0 {
-			document_signature_write(&builder, &budget, " = ")
+			if !hide_inferred_type do document_signature_write(&builder, &budget, " = ")
 			document_signature_write(&builder, &budget, entity.init_string)
 		}
 	case 4:

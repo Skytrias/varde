@@ -769,6 +769,8 @@ site_index_for_package :: proc(indexes: ^Site_Render_Indexes, pkg: ^Package) -> 
 }
 
 odin_token_class :: proc(kind: tokenizer.Token_Kind) -> string {
+	if kind == .String || kind == .Rune do return "tok-string"
+	if kind == .Integer || kind == .Float || kind == .Imag do return "tok-number"
 	if tokenizer.is_keyword(kind) do return "tok-keyword"
 	if tokenizer.is_literal(kind) do return "tok-literal"
 	if tokenizer.is_operator(kind) do return "tok-operator"
@@ -791,7 +793,9 @@ odin_token_class :: proc(kind: tokenizer.Token_Kind) -> string {
 odin_identifier_is_local_label :: proc(code: string, end: int) -> bool {
 	index := end
 	for index < len(code) && (code[index] == ' ' || code[index] == '\t' || code[index] == '\r' || code[index] == '\n') do index += 1
-	return index < len(code) && code[index] == ':' && (index+1 >= len(code) || code[index+1] != ':')
+	if index >= len(code) do return false
+	if code[index] == ':' do return index+1 >= len(code) || code[index+1] != ':'
+	return code[index] == '=' && (index+1 >= len(code) || code[index+1] != '=')
 }
 
 odin_identifier_is_selector :: proc(code: string, end: int) -> bool {
@@ -1155,17 +1159,17 @@ write_package_entry :: proc(builder: ^strings.Builder, model: ^Model, package_co
 	entry_context.file = item.file
 	strings.write_string(builder, "<article class=\"symbol\" id=\"")
 	html_attr(builder, entry.anchor)
-	strings.write_string(builder, "\"><header class=\"symbol-heading\"><h3><a class=\"symbol-name\" href=\"#")
+	strings.write_string(builder, "\"><header class=\"symbol-heading\"><h3 class=\"sr-only\"><a class=\"symbol-name\" href=\"#")
 	html_attr(builder, entry.anchor)
 	strings.write_string(builder, "\">")
 	html_text(builder, entry.name)
-	strings.write_string(builder, "</a></h3>")
+	strings.write_string(builder, "</a></h3><code class=\"signature\">")
+	write_odin_code(builder, entry.signature, entry_context)
+	strings.write_string(builder, "</code>")
 	if href, ok := source_href(config, model, entry^); ok {
 		strings.write_string(builder, "<a class=\"source-link\" href=\""); html_attr(builder, href); strings.write_string(builder, "\" rel=\"noreferrer noopener\" target=\"_blank\">Source</a>")
 	}
-	strings.write_string(builder, "</header><pre><code>")
-	write_odin_code(builder, entry.signature, entry_context)
-	strings.write_string(builder, "</code></pre>")
+	strings.write_string(builder, "</header>")
 	if len(entry.summary) > 0 { strings.write_string(builder, "<p class=\"summary\">"); html_text(builder, entry.summary); strings.write_string(builder, "</p>") }
 	write_doc_body(builder, entry_body(entry^), entry_context)
 	strings.write_string(builder, "</article>")
@@ -1178,11 +1182,13 @@ write_package_entry_group :: proc(builder: ^strings.Builder, model: ^Model, pack
 	html_attr(builder, strings.concatenate({anchor, "-heading"}, context.temp_allocator))
 	strings.write_string(builder, "\"><header class=\"entry-group-heading\"><h2 id=\"")
 	html_attr(builder, strings.concatenate({anchor, "-heading"}, context.temp_allocator))
-	strings.write_string(builder, "\">"); html_text(builder, entry_group_title(group)); strings.write_string(builder, "</h2><span class=\"entry-group-count\">")
+	strings.write_string(builder, "\"><a class=\"entry-group-link\" href=\"#")
+	html_attr(builder, anchor)
+	strings.write_string(builder, "\">"); html_text(builder, entry_group_title(group)); strings.write_string(builder, "</a></h2><span class=\"entry-group-count\">")
 	write_grouped_count(builder, len(entries))
-	strings.write_string(builder, "</span></header>")
+	strings.write_string(builder, "</span></header><div class=\"entry-group-content\">")
 	for item in entries do write_package_entry(builder, model, package_context, config, item)
-	strings.write_string(builder, "</section>")
+	strings.write_string(builder, "</div></section>")
 }
 
 write_package_toc_group :: proc(builder: ^strings.Builder, group: Entry_Group, entries: []Package_Entry) {
@@ -1275,23 +1281,25 @@ write_builtin_types_page :: proc(model: ^Model, config: Config, extensions: Site
 	write_package_tree(&builder, model, page_path, output_root, "", false, false)
 	strings.write_string(&builder, "</nav></aside><article class=\"reference builtin-reference\"><nav class=\"breadcrumb\" aria-label=\"Breadcrumb\"><a href=\"")
 	html_attr(&builder, package_href_from(page_path, path_join({output_root, "index.html"}), ""))
-	strings.write_string(&builder, "\">Packages</a> / Odin built-in types</nav><header class=\"package-heading\"><p class=\"package-path\">renderer reference</p><h1>Odin built-in types</h1><p>Foundational Odin type names resolved by Varde only when this documentation set has no matching declaration.</p></header><section class=\"entry-group\" aria-labelledby=\"builtin-types-heading\"><header class=\"entry-group-heading\"><h2 id=\"builtin-types-heading\">Types</h2><span class=\"entry-group-count\">")
+	strings.write_string(&builder, "\">Packages</a> / Odin built-in types</nav><header class=\"package-heading\"><p class=\"package-path\">renderer reference</p><h1>Odin built-in types</h1><p>Foundational Odin type names resolved by Varde only when this documentation set has no matching declaration.</p></header><section class=\"entry-group\" id=\"builtin-types\" aria-labelledby=\"builtin-types-heading\"><header class=\"entry-group-heading\"><h2 id=\"builtin-types-heading\"><a class=\"entry-group-link\" href=\"#builtin-types\">Types</a></h2><span class=\"entry-group-count\">")
 	write_grouped_count(&builder, len(ODIN_BUILTIN_TYPES))
-	strings.write_string(&builder, "</span></header>")
+	strings.write_string(&builder, "</span></header><div class=\"entry-group-content\">")
 	for builtin in ODIN_BUILTIN_TYPES {
 		strings.write_string(&builder, "<article class=\"symbol builtin-symbol\" id=\"builtin-")
 		html_attr(&builder, builtin.name)
-		strings.write_string(&builder, "\"><header class=\"symbol-heading\"><h3><a class=\"symbol-name\" href=\"#builtin-")
+		strings.write_string(&builder, "\"><header class=\"symbol-heading\"><h3 class=\"sr-only\"><a class=\"symbol-name\" href=\"#builtin-")
 		html_attr(&builder, builtin.name)
 		strings.write_string(&builder, "\">")
 		html_text(&builder, builtin.name)
-		strings.write_string(&builder, "</a></h3></header><p class=\"summary\">")
+		strings.write_string(&builder, "</a></h3><code class=\"signature\">")
+		html_text(&builder, builtin.name)
+		strings.write_string(&builder, "</code></header><p class=\"summary\">")
 		html_text(&builder, builtin.description)
 		strings.write_string(&builder, "</p><p class=\"builtin-category\">")
 		html_text(&builder, builtin.category)
 		strings.write_string(&builder, "</p></article>")
 	}
-	strings.write_string(&builder, "</section></article><aside class=\"package-toc\"><nav aria-label=\"On this page\"><p class=\"toc-title\">On this page</p><a href=\"#main\">Overview</a><a href=\"#builtin-types-heading\">Types</a></nav></aside></main>")
+	strings.write_string(&builder, "</div></section></article><aside class=\"package-toc\"><nav aria-label=\"On this page\"><p class=\"toc-title\">On this page</p><a href=\"#main\">Overview</a><a href=\"#builtin-types\">Types</a></nav></aside></main>")
 	site_footer(&builder, assets_relative, extensions)
 	return write_text_file(page_path, &builder)
 }
@@ -1594,8 +1602,21 @@ body{font-size:16px;line-height:1.6;text-rendering:optimizeLegibility}.site-head
 main.home{max-width:1120px;padding-top:clamp(56px,8vw,112px)}.home .hero{max-width:830px}.hero h1{max-width:15ch;font-size:4.5rem;letter-spacing:-.035em;line-height:.98;text-wrap:balance}.hero p{margin-top:1.15rem;font-size:1.08rem;line-height:1.65;text-wrap:pretty}.metrics{gap:0;margin:38px 0 58px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.metrics span,.kind{padding:9px 12px;border:0;border-radius:0;background:transparent;font-size:.78rem;font-variant-numeric:tabular-nums}.metrics span+span{border-left:1px solid var(--line)}.package-directory{margin-top:0}.section-heading{align-items:flex-end;margin-bottom:15px}.section-heading h2{font-size:1.5rem;letter-spacing:-.03em}.section-heading p{max-width:40ch;line-height:1.45}.home .package-tree{padding:0;border-width:1px 0;border-radius:0;background:transparent}.home .package-tree>li+li{border-top:1px solid var(--line)}.home .package-tree .tree-package{padding:14px 12px;border-radius:0}.home .package-tree .tree-package:hover{background:var(--surface-raised)}.home .package-tree .tree-meta{font-size:.78rem}.home .package-tree ul{margin-left:18px;padding-left:15px}.home .package-branch{margin:0}.home .package-branch>summary{border-radius:0}.home .package-branch>summary .tree-package,.home .package-branch>summary .tree-folder{padding-top:14px;padding-bottom:14px}
 .reference-layout{padding-top:clamp(30px,4vw,54px)}.reference-layout .reference{min-width:0;overflow-x:clip}.package-heading{padding:8px 0 25px}.package-heading h1{font-size:3.25rem;letter-spacing:-.035em;line-height:1.02;text-wrap:balance}.breadcrumb{font-size:.82rem}.package-heading .package-path{font-size:.78rem;letter-spacing:.01em}.entry-group{margin-top:38px}.entry-group-heading{padding-bottom:11px}.entry-group-heading h2{font-size:1.3rem;letter-spacing:-.025em}.symbol{padding:26px 0 28px}.symbol-heading{gap:10px}.symbol h3{font-size:1.3rem;letter-spacing:-.018em;overflow-wrap:anywhere}.symbol h3 .kind,.symbol .kind{margin-left:.55rem;padding:0;border:0;border-radius:0;background:transparent;color:var(--muted);font-size:.68rem;font-weight:760;letter-spacing:.075em}.symbol pre{margin-top:12px;padding:13px 16px;border-radius:4px;line-height:1.55;box-shadow:none}.symbol p{max-width:73ch;line-height:1.65;text-wrap:pretty}.package-explorer{padding-right:18px}.tree-package,.tree-folder{padding:5px 7px;border-radius:3px}.tree-package.is-active{background:color-mix(in srgb,var(--accent) 11%,var(--surface));color:var(--accent);font-weight:760}.package-toc{padding-left:20px;border-left:1px solid var(--line)}.toc-jumps{gap:0;margin:8px 0 15px}.toc-jumps a{padding:2px 7px!important;border:0;border-radius:0;background:transparent;color:var(--muted);font-size:.73rem;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--line) 80%,transparent);text-underline-offset:3px}.toc-jumps a:first-child{padding-left:0!important}.toc-jumps a:hover{color:var(--accent)}.toc-group{padding-top:10px}.toc-group .toc-entry{padding:3px 0 3px 9px}.toc-entry[data-active="true"]{margin-left:0;padding-left:9px;border-left:0;background:color-mix(in srgb,var(--accent) 11%,transparent);color:var(--accent);font-weight:750}.toc-entry[data-active="true"]:not(:focus-visible){background:color-mix(in srgb,var(--accent) 11%,transparent)}
 .reference-layout{padding-top:clamp(30px,4vw,54px)}.reference-layout .reference{min-width:0;overflow-x:clip}.package-heading{padding:8px 0 25px}.package-heading h1{font-size:3.25rem;letter-spacing:-.035em;line-height:1.02;text-wrap:balance}.breadcrumb{font-size:.82rem}.package-heading .package-path{font-size:.78rem;letter-spacing:.01em}.entry-group{margin-top:38px}.entry-group-heading{padding-bottom:11px}.entry-group-heading h2{font-size:1.3rem;letter-spacing:-.025em}.entry-group .symbol:first-of-type{padding-top:24px}.symbol{margin:0;padding:24px 0 0;border-bottom:0}.symbol+.symbol{margin-top:26px}.symbol-heading{gap:10px}.symbol h3{font-size:1.3rem;letter-spacing:-.018em;overflow-wrap:anywhere}.symbol pre{margin-top:12px;padding:13px 16px;border-radius:4px;line-height:1.55;box-shadow:none}.symbol p{max-width:73ch;line-height:1.65;text-wrap:pretty}.package-explorer{padding-right:18px}.tree-package,.tree-folder{padding:5px 7px;border-radius:3px}.tree-package.is-active{background:color-mix(in srgb,var(--accent) 11%,var(--surface));color:var(--accent);font-weight:760}.package-toc{padding-left:20px;border-left:1px solid var(--line)}.toc-jumps{gap:0;margin:8px 0 15px}.toc-jumps a{padding:2px 7px!important;border:0;border-radius:0;background:transparent;color:var(--muted);font-size:.73rem;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--line) 80%,transparent);text-underline-offset:3px}.toc-jumps a:first-child{padding-left:0!important}.toc-jumps a:hover{color:var(--accent)}.toc-group{padding-top:10px}.toc-group .toc-entry{padding:3px 0 3px 9px}.toc-entry[data-active="true"]{margin-left:0;padding-left:9px;border-left:0;background:color-mix(in srgb,var(--accent) 11%,transparent);color:var(--accent);font-weight:750}.toc-entry[data-active="true"]:not(:focus-visible){background:color-mix(in srgb,var(--accent) 11%,transparent)}
-.search-dialog,.settings-dialog{border-radius:9px;box-shadow:none}.search-result,.search-dialog input,.settings-form select{border-radius:4px}.search-kind{border-radius:3px}.settings-form fieldset{border-radius:4px}.search-dialog-header h2{letter-spacing:-.025em}.search-result[data-selected="true"]{background:color-mix(in srgb,var(--accent) 12%,var(--surface))}@media(max-width:760px){.hero h1{font-size:3.25rem}}@media(max-width:620px){.site-header{min-height:62px}.site-header #site-search{min-height:34px}.hero h1{font-size:2.75rem}.package-heading h1{font-size:2.5rem}.metrics{margin:30px 0 44px}.metrics span{padding:8px 9px;font-size:.72rem}.metrics span+span{border-left:0}.metrics span:nth-child(n+3){border-top:1px solid var(--line)}.metrics{display:grid;grid-template-columns:1fr 1fr}.section-heading p{margin-top:7px}.home .package-tree .tree-package{padding:13px 8px}.symbol{padding:22px 0}.symbol h3{font-size:1.2rem}.symbol pre{padding:11px 12px;font-size:.85rem}.package-heading{padding-bottom:20px}}
+.search-dialog,.settings-dialog{border-radius:9px;box-shadow:none}.search-result,.search-dialog input,.settings-form select{border-radius:4px}.search-kind{border-radius:3px}.settings-form fieldset{border-radius:4px}.search-dialog-header h2{letter-spacing:-.025em}.search-result[data-selected="true"]{background:color-mix(in srgb,var(--accent) 12%,var(--surface))}.entry-group-heading h2{min-width:0}.entry-group-link{color:var(--text);text-decoration:none}.entry-group-link:hover{text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 62%,transparent);text-underline-offset:5px}.entry-group-link:focus-visible{outline-offset:5px}.entry-group .symbol:first-of-type{padding-top:27px}.symbol{padding:0;margin:0;scroll-margin-top:96px}.symbol+.symbol{margin-top:32px}.symbol-heading{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:20px;align-items:start}.symbol .signature{display:block;min-width:0;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:clamp(1.06rem,1.35vw,1.25rem);font-weight:620;line-height:1.55;letter-spacing:-.012em;white-space:pre-wrap;overflow-wrap:anywhere;tab-size:var(--code-tab-width,4)}.symbol .source-link{align-self:baseline;margin:5px 0 0;color:var(--muted);font-size:.74rem;font-weight:700;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--line) 84%,transparent);text-underline-offset:3px}.symbol .source-link:hover{color:var(--accent);text-decoration-color:currentColor}.symbol p:first-of-type{margin-top:14px}.builtin-symbol .signature{font-size:clamp(1.12rem,1.45vw,1.32rem)}@media(max-width:760px){.hero h1{font-size:3.25rem}}@media(max-width:620px){.site-header{min-height:62px}.site-header #site-search{min-height:34px}.hero h1{font-size:2.75rem}.package-heading h1{font-size:2.5rem}.metrics{margin:30px 0 44px}.metrics span{padding:8px 9px;font-size:.72rem}.metrics span+span{border-left:0}.metrics span:nth-child(n+3){border-top:1px solid var(--line)}.metrics{display:grid;grid-template-columns:1fr 1fr}.section-heading p{margin-top:7px}.home .package-tree .tree-package{padding:13px 8px}.symbol{padding:0}.symbol+.symbol{margin-top:28px}.symbol-heading{display:block}.symbol .signature{font-size:1.02rem;line-height:1.55}.symbol .source-link{display:inline-block;margin-top:7px}.symbol pre{padding:11px 12px;font-size:.85rem}.package-heading{padding-bottom:20px}}
 @media(max-width:980px){.package-toc{display:none}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important}}
+`
+
+// Package groups are the visual units of the reference. Every declaration
+// opens with its identifier, while the rest of its signature recedes into a
+// compact scan line. Each group has its own quiet surface depth.
+SITE_DECLARATION_RHYTHM_CSS :: `
+.reference>.entry-group{--region-tint-quiet:2.25%;--region-tint-alternate:4.5%;margin:50px 0 0;padding:0;background:transparent}.entry-group-content{margin-top:17px;padding:0;background:transparent}.entry-group-content>.symbol{padding:20px 26px 21px;background:color-mix(in srgb,var(--accent) var(--region-tint-quiet),var(--surface-raised))}.entry-group-content>.symbol:nth-child(even){background:color-mix(in srgb,var(--accent) var(--region-tint-alternate),var(--surface))}:root[data-theme="odin-light"] .reference>.entry-group,:root[data-theme="github-light"] .reference>.entry-group{--region-tint-quiet:3.75%;--region-tint-alternate:6.75%}.entry-group .symbol:first-of-type{padding-top:20px}.symbol+.symbol{margin-top:9px}.symbol .signature{font-size:.96rem;font-weight:600;line-height:1.55;letter-spacing:-.006em}.symbol .signature>:first-child{font-size:clamp(1.28rem,1.9vw,1.55rem);font-weight:780;line-height:1.1;letter-spacing:-.028em}@media(max-width:620px){.reference>.entry-group{margin-top:42px}.entry-group-content{margin-top:14px}.entry-group-content>.symbol{padding:17px 18px 18px}.symbol+.symbol{margin-top:7px}.symbol .signature{font-size:.92rem}.symbol .signature>:first-child{font-size:1.22rem}}
+`
+
+// Literal categories remain legible at a glance in every reader theme while
+// declaration names and navigable type links keep their existing colors.
+SITE_SIGNATURE_TOKEN_CSS :: `
+.signature .tok-unresolved{text-decoration:none}.tok-string{color:#0b7654}.tok-number{color:#7c4fc4}:root[data-theme="odin-light"] .tok-string{color:#0a6b3f}:root[data-theme="odin-light"] .tok-number{color:#6f42c1}:root[data-theme="monokai"] .tok-string{color:#e6db74}:root[data-theme="monokai"] .tok-number{color:#ae81ff}:root[data-theme="github-light"] .tok-string{color:#0a6b3f}:root[data-theme="github-light"] .tok-number{color:#8250df}:root[data-theme="tokyo-night"] .tok-string{color:#9ece6a}:root[data-theme="tokyo-night"] .tok-number{color:#bb9af7}
 `
 
 // Keep the browser's document scrollbar native. These rules only theme scroll
@@ -1712,6 +1733,8 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 	strings.write_string(&css_builder, SITE_REFERENCE_WIDTH_CSS)
 	strings.write_string(&css_builder, SITE_THEME_PRESETS_CSS)
 	strings.write_string(&css_builder, SITE_READER_REFINEMENT_CSS)
+	strings.write_string(&css_builder, SITE_DECLARATION_RHYTHM_CSS)
+	strings.write_string(&css_builder, SITE_SIGNATURE_TOKEN_CSS)
 	// This comes after the theme presets so built-ins remain visibly distinct
 	// from ordinary declaration links under every reader-selected palette.
 	strings.write_string(&css_builder, ":root[data-theme=\"odin-light\"] .tok-link.tok-builtin{color:#9a6700}:root[data-theme=\"monokai\"] .tok-link.tok-builtin{color:#fd971f}:root[data-theme=\"github-light\"] .tok-link.tok-builtin{color:#8250df}:root[data-theme=\"tokyo-night\"] .tok-link.tok-builtin{color:#e0af68}\n")
@@ -2074,10 +2097,17 @@ test_internal_links_resolve_only_local_or_imported_targets :: proc(t: ^testing.T
 	testing.expect(t, strings.contains(rendered, "../../ui/#element"), "qualified imported identifiers should link in highlighted code")
 	testing.expect(t, strings.contains(rendered, "href=\"#local\""), "local identifiers should link in highlighted code")
 	testing.expect(t, strings.contains(rendered, "class=\"tok-directive\">#</span><span class=\"tok-directive\">packed"), "Odin directives should retain a single directive color")
+	literal_code: strings.Builder
+	defer strings.builder_destroy(&literal_code)
+	write_odin_code(&literal_code, "plain_text :: \"plain\"; raw_text :: `raw`; unit_ratio :: 1000.0", ctx)
+	literal_rendered := strings.to_string(literal_code)
+	testing.expect(t, strings.contains(literal_rendered, "class=\"tok-string\">&quot;plain&quot;") && strings.contains(literal_rendered, "class=\"tok-string\">`raw`"), "quoted and raw strings should receive a dedicated syntax class")
+	testing.expect(t, strings.contains(literal_rendered, "class=\"tok-number\">1000.0"), "numeric literals should receive a dedicated syntax class")
 	field_code: strings.Builder
 	defer strings.builder_destroy(&field_code)
 	write_odin_code(&field_code, "Worker :: struct { init: proc(), value: Local }", ctx)
 	testing.expect(t, !strings.contains(strings.to_string(field_code), "href=\"#init\""), "struct field labels must not link to same-named package declarations")
+	testing.expect(t, odin_identifier_is_local_label("First = 0", len("First")), "enum member labels should not be treated as unresolved declaration references")
 	builtin_code: strings.Builder
 	defer strings.builder_destroy(&builtin_code)
 	write_odin_code(&builtin_code, "record: i32, missing: Not_Documented", ctx)
@@ -2167,6 +2197,8 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "../../../assets/overrides.css"), "every page should load the optional override stylesheet after base styles")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"package-toc\""), "package pages should include a compact on-page index")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "id=\"group-types\"") && strings.contains(string(page_data), "id=\"group-procedure-groups\""), "package pages should group declarations by kind")
+	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "</header><div class=\"entry-group-content\">"), "group headers should remain outside their declaration surface")
+	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"entry-group-link\" href=\"#group-types\""), "visible declaration group headings should link to their group anchors")
 	testing.expect(t, page_read_err == nil && !strings.contains(string(page_data), "class=\"kind\""), "group headings should establish declaration kind without repeating a per-symbol label")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"toc-group\" data-toc-group=\"group-types\"") && strings.contains(string(page_data), "class=\"toc-jumps\""), "the on-page index should offer grouped quick jumps")
 	alpha_index := strings.index(string(page_data), "id=\"Alpha\"")
@@ -2175,11 +2207,11 @@ test_build_emits_directly_openable_site :: proc(t: ^testing.T) {
 	testing.expect(t, page_read_err == nil && alpha_index >= 0 && zebra_index > alpha_index && constants_index > zebra_index, "each declaration group should be alphabetized and keep the package kind order")
 	testing.expect(t, page_read_err == nil && !strings.contains(string(page_data), root), "package pages should not expose absolute workspace paths")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "<table class=\"doc-table\">"), "documentation tables should render as semantic HTML tables")
-	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"symbol-heading\""), "package pages should use compact declaration headings")
+	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "class=\"signature\"") && strings.contains(string(page_data), "<h3 class=\"sr-only\">"), "declarations should use one visible signature while retaining an accessible heading")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "tok-builtin") && strings.contains(string(page_data), "builtin-types/#builtin-int"), "rendered signatures should link foundational types to the local built-in reference")
 	testing.expect(t, page_read_err == nil && strings.contains(string(page_data), "https://example.test/demo/blob/main/demo.odin#L7"), "enabled source links should point to repository files and lines")
 	builtin_data, builtin_read_err := os.read_entire_file(builtin_page, context.temp_allocator)
-	testing.expect(t, builtin_read_err == nil && strings.contains(string(builtin_data), "Odin built-in types") && strings.contains(string(builtin_data), "id=\"builtin-int\""), "the built-in page should explain each renderer-owned type target")
+	testing.expect(t, builtin_read_err == nil && strings.contains(string(builtin_data), "Odin built-in types") && strings.contains(string(builtin_data), "id=\"builtin-int\"") && strings.contains(string(builtin_data), "href=\"#builtin-types\""), "the built-in page should explain each renderer-owned type target with a linked type group")
 	manifest_path := path_join({site_root, SITE_MANIFEST_FILE_NAME})
 	manifest_data, manifest_read_err := os.read_entire_file(manifest_path, context.temp_allocator)
 	testing.expect(t, manifest_read_err == nil && strings.contains(string(manifest_data), "\"source_links\": true"), "manifest should report when source links were emitted")
