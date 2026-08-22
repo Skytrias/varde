@@ -98,6 +98,7 @@ Runtime_Build_Result :: struct {
 	timings:       Runtime_Timings,
 	lower_timing:  extractor.Lower_Timing,
 	site_page_timing: Site_Page_Timing,
+	site_index_timing: Site_Index_Timing,
 	diagnostics:   [dynamic]Runtime_Diagnostic,
 	error_message: string,
 }
@@ -129,6 +130,7 @@ Runtime_Build_Result_Destroy :: proc(result: ^Runtime_Build_Result, allocator: m
 	if len(result.output_path) > 0 do delete(result.output_path, allocator)
 	if len(result.artifact_path) > 0 do delete(result.artifact_path, allocator)
 	if len(result.error_message) > 0 do delete(result.error_message, allocator)
+	if len(result.site_page_timing.package_page_max_path) > 0 do delete(result.site_page_timing.package_page_max_path, allocator)
 	for &diagnostic in result.diagnostics {
 		if len(diagnostic.path) > 0 do delete(diagnostic.path, allocator)
 		if len(diagnostic.message) > 0 do delete(diagnostic.message, allocator)
@@ -268,6 +270,8 @@ runtime_finish_site :: proc(result: ^Runtime_Build_Result, model: ^Model, config
 		}
 	}
 	result.site_page_timing = site.site_page_timing
+	result.site_page_timing.package_page_max_path = runtime_string_clone(site.site_page_timing.package_page_max_path, allocator)
+	result.site_index_timing = site.site_index_timing
 	if !site.ok {
 		result.canceled = build_canceled(request.cancel_requested) || site.error_message == "Build canceled"
 		runtime_result_error(result, site.error_message, allocator)

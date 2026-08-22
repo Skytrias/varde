@@ -15,6 +15,7 @@ import "core:strings"
 import "core:sync"
 import "core:testing"
 import "core:time"
+import "core:unicode/utf8"
 import tokenizer "core:odin/tokenizer"
 
 SITE_CONFIG_FILE_NAME :: "varde.json"
@@ -165,6 +166,22 @@ Build_Result :: struct {
 	error_message:   string,
 	timings:         Runtime_Timings,
 	site_page_timing: Site_Page_Timing,
+	site_index_timing: Site_Index_Timing,
+}
+
+Site_Index_Timing :: struct {
+	measured:          bool,
+	render_indexes_ms: f64,
+	extensions_ms:     f64,
+	static_assets_ms:  f64,
+	search_render_ms:  f64,
+	search_write_ms:   f64,
+	search_entries:    int,
+	search_bytes:      int,
+	search_capacity:   int,
+	search_quote_bulk: int,
+	search_quote_fallback: int,
+	overrides_ms:      f64,
 }
 
 Site_Page_Timing :: struct {
@@ -173,12 +190,26 @@ Site_Page_Timing :: struct {
 	builtin_page_ms:       f64,
 	package_pages_ms:      f64,
 	package_page_max_ms:   f64,
+	package_page_max_path: string,
+	package_page_max_entries: int,
 	package_page_count:    int,
 	package_tree_build_ms: f64,
 	package_tree_render_ms: f64,
 	package_tree_calls:    int,
 	group_entries_ms:      f64,
 	group_entries_calls:   int,
+	package_content_ms:    f64,
+	package_toc_ms:        f64,
+	signature_ms:          f64,
+	signature_calls:       int,
+	signature_bytes:       int,
+	signature_tokens:      int,
+	signature_identifiers: int,
+	builtin_lookup_calls:  int,
+	builtin_candidates:    int,
+	doc_body_ms:           f64,
+	doc_body_calls:        int,
+	doc_body_bytes:        int,
 	package_write_ms:      f64,
 	package_write_calls:   int,
 }
@@ -710,8 +741,15 @@ ODIN_BUILTIN_TYPES :: []Builtin_Type{
 	{"uintptr", "unsigned integer", "An unsigned integer large enough to hold a pointer."},
 }
 
-builtin_type_find :: proc(name: string) -> (Builtin_Type, bool) {
+builtin_type_find :: proc(indexes: ^Site_Render_Indexes, name: string, timing: ^Site_Page_Timing = nil) -> (Builtin_Type, bool) {
+	if timing != nil do timing.builtin_lookup_calls += 1
+	if indexes != nil {
+		if timing != nil do timing.builtin_candidates += 1
+		builtin, ok := indexes.builtin_types[name]
+		return builtin, ok
+	}
 	for builtin in ODIN_BUILTIN_TYPES {
+		if timing != nil do timing.builtin_candidates += 1
 		if builtin.name == name do return builtin, true
 	}
 	return {}, false
@@ -730,6 +768,7 @@ Site_Render_Indexes :: struct {
 	by_package:       map[^Package]^Site_Package_Index,
 	by_relative_path: map[string]^Package,
 	by_path:          map[string]^Package,
+	builtin_types:    map[string]Builtin_Type,
 }
 
 site_render_indexes_build :: proc(model: ^Model, allocator: mem.Allocator = context.allocator) -> Site_Render_Indexes {
@@ -739,7 +778,9 @@ site_render_indexes_build :: proc(model: ^Model, allocator: mem.Allocator = cont
 		by_package = make(map[^Package]^Site_Package_Index, len(model.packages), allocator),
 		by_relative_path = make(map[string]^Package, len(model.packages), allocator),
 		by_path = make(map[string]^Package, len(model.packages), allocator),
+		builtin_types = make(map[string]Builtin_Type, len(ODIN_BUILTIN_TYPES), allocator),
 	}
+	for builtin in ODIN_BUILTIN_TYPES do indexes.builtin_types[builtin.name] = builtin
 	for &pkg in model.packages {
 		if !site_package_is_renderable(pkg) do continue
 		indexes.by_relative_path[pkg.relative_path] = &pkg
@@ -778,6 +819,7 @@ site_render_indexes_destroy :: proc(indexes: ^Site_Render_Indexes) {
 	delete(indexes.by_package)
 	delete(indexes.by_relative_path)
 	delete(indexes.by_path)
+	delete(indexes.builtin_types)
 	indexes^ = {}
 }
 
@@ -829,7 +871,7 @@ builtin_type_href :: proc(ctx: Doc_Render_Context, name: string) -> string {
 	return package_href_from(ctx.page_path, target_path, strings.concatenate({"builtin-", name}, context.temp_allocator))
 }
 
-write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render_Context) {
+write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render_Context, timing: ^Site_Page_Timing = nil) {
 	lexer: tokenizer.Tokenizer
 	tokenizer.init(&lexer, code, "", nil)
 	cursor := 0
@@ -840,6 +882,7 @@ write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render
 	for {
 		token := tokenizer.scan(&lexer)
 		if token.kind == .EOF do break
+		if timing != nil do timing.signature_tokens += 1
 		start := clamp(token.pos.offset, 0, len(code))
 		if start > cursor do html_text(builder, code[cursor:start])
 		text := token.text
@@ -857,12 +900,13 @@ write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render
 		builtin: Builtin_Type
 		unresolved := false
 		if token.kind == .Ident && !is_directive && !odin_identifier_is_local_label(code, end) {
+			if timing != nil do timing.signature_identifiers += 1
 			if len(selector_alias) > 0 {
 				href, linked = site_internal_href(ctx, strings.concatenate({selector_alias, ".", text}, context.temp_allocator), false)
 			} else {
 				href, linked = site_internal_href(ctx, text, false)
 				if !linked {
-					builtin, linked = builtin_type_find(text)
+					builtin, linked = builtin_type_find(ctx.indexes, text, timing)
 					if linked do href = builtin_type_href(ctx, text)
 				}
 			}
@@ -1173,7 +1217,7 @@ package_group_entries :: proc(pkg: ^Package, group: Entry_Group) -> [dynamic]Pac
 	return entries
 }
 
-write_package_entry :: proc(builder: ^strings.Builder, model: ^Model, package_context: Doc_Render_Context, config: Config, item: Package_Entry) {
+write_package_entry :: proc(builder: ^strings.Builder, model: ^Model, package_context: Doc_Render_Context, config: Config, item: Package_Entry, timing: ^Site_Page_Timing = nil) {
 	entry := item.entry
 	entry_context := package_context
 	entry_context.file = item.file
@@ -1184,18 +1228,31 @@ write_package_entry :: proc(builder: ^strings.Builder, model: ^Model, package_co
 	strings.write_string(builder, "\">")
 	html_text(builder, entry.name)
 	strings.write_string(builder, "</a></h3><code class=\"signature\">")
-	write_odin_code(builder, entry.signature, entry_context)
+	signature_started := time.tick_now()
+	write_odin_code(builder, entry.signature, entry_context, timing)
+	if timing != nil {
+		timing.signature_ms += time.duration_milliseconds(time.tick_since(signature_started))
+		timing.signature_calls += 1
+		timing.signature_bytes += len(entry.signature)
+	}
 	strings.write_string(builder, "</code>")
 	if href, ok := source_href(config, model, entry^); ok {
 		strings.write_string(builder, "<a class=\"source-link\" href=\""); html_attr(builder, href); strings.write_string(builder, "\" rel=\"noreferrer noopener\" target=\"_blank\">Source</a>")
 	}
 	strings.write_string(builder, "</header>")
 	if len(entry.summary) > 0 { strings.write_string(builder, "<p class=\"summary\">"); html_text(builder, entry.summary); strings.write_string(builder, "</p>") }
-	write_doc_body(builder, entry_body(entry^), entry_context)
+	body := entry_body(entry^)
+	doc_started := time.tick_now()
+	write_doc_body(builder, body, entry_context)
+	if timing != nil {
+		timing.doc_body_ms += time.duration_milliseconds(time.tick_since(doc_started))
+		timing.doc_body_calls += 1
+		timing.doc_body_bytes += len(body)
+	}
 	strings.write_string(builder, "</article>")
 }
 
-write_package_entry_group :: proc(builder: ^strings.Builder, model: ^Model, package_context: Doc_Render_Context, config: Config, group: Entry_Group, entries: []Package_Entry) {
+write_package_entry_group :: proc(builder: ^strings.Builder, model: ^Model, package_context: Doc_Render_Context, config: Config, group: Entry_Group, entries: []Package_Entry, timing: ^Site_Page_Timing = nil) {
 	if len(entries) == 0 do return
 	anchor := entry_group_anchor(group)
 	strings.write_string(builder, "<section class=\"entry-group\" id=\""); html_attr(builder, anchor); strings.write_string(builder, "\" aria-labelledby=\"")
@@ -1207,7 +1264,7 @@ write_package_entry_group :: proc(builder: ^strings.Builder, model: ^Model, pack
 	strings.write_string(builder, "\">"); html_text(builder, entry_group_title(group)); strings.write_string(builder, "</a></h2><span class=\"entry-group-count\">")
 	write_grouped_count(builder, len(entries))
 	strings.write_string(builder, "</span></header><div class=\"entry-group-content\">")
-	for item in entries do write_package_entry(builder, model, package_context, config, item)
+	for item in entries do write_package_entry(builder, model, package_context, config, item, timing)
 	strings.write_string(builder, "</div></section>")
 }
 
@@ -1258,7 +1315,13 @@ write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^P
 	html_text(&builder, pkg.name)
 	strings.write_string(&builder, "</h1></header>")
 	package_context := Doc_Render_Context{model = model, indexes = indexes, output_root = output_root, page_path = page_path, pkg = pkg}
+	overview_started := time.tick_now()
 	write_doc_body(&builder, pkg.overview, package_context)
+	if timing != nil {
+		timing.doc_body_ms += time.duration_milliseconds(time.tick_since(overview_started))
+		timing.doc_body_calls += 1
+		timing.doc_body_bytes += len(pkg.overview)
+	}
 	group_entries: [ENTRY_GROUP_COUNT][dynamic]Package_Entry
 	defer {
 		for &entries in group_entries do delete(entries)
@@ -1270,8 +1333,11 @@ write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^P
 			timing.group_entries_ms += time.duration_milliseconds(time.tick_since(group_started))
 			timing.group_entries_calls += 1
 		}
-		write_package_entry_group(&builder, model, package_context, config, group, group_entries[int(group)][:])
 	}
+	content_started := time.tick_now()
+	for group in ENTRY_GROUP_ORDER do write_package_entry_group(&builder, model, package_context, config, group, group_entries[int(group)][:], timing)
+	if timing != nil do timing.package_content_ms += time.duration_milliseconds(time.tick_since(content_started))
+	toc_started := time.tick_now()
 	strings.write_string(&builder, "</article><aside class=\"package-toc\"><nav aria-label=\"On this page\"><p class=\"toc-title\">On this page</p><a class=\"toc-overview\" href=\"#main\">Overview</a><div class=\"toc-jumps\" aria-label=\"Declaration groups\">")
 	for group in ENTRY_GROUP_ORDER {
 		entries := group_entries[int(group)]
@@ -1285,6 +1351,7 @@ write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^P
 	for group in ENTRY_GROUP_ORDER {
 		write_package_toc_group(&builder, group, group_entries[int(group)][:])
 	}
+	if timing != nil do timing.package_toc_ms += time.duration_milliseconds(time.tick_since(toc_started))
 	strings.write_string(&builder, "</nav></aside></main>")
 	site_footer(&builder, assets_relative, extensions)
 	write_started := time.tick_now()
@@ -1730,23 +1797,44 @@ search_index_entry_write :: proc(
 	builder: ^strings.Builder,
 	label, kind, entry_context, href, search: string,
 	first: bool,
+	timing: ^Site_Index_Timing = nil,
 ) -> bool {
+	write_quoted := proc(builder: ^strings.Builder, value: string, timing: ^Site_Index_Timing) {
+		if !utf8.valid_string(value) {
+			if timing != nil do timing.search_quote_fallback += 1
+			strings.write_quoted_string(builder, value)
+			return
+		}
+		if timing != nil do timing.search_quote_bulk += 1
+		strings.write_string(builder, "\"")
+		span_start := 0
+		for r, index in value {
+			if r >= 0x20 && r < 0x7f && r != '"' && r != '\\' do continue
+			if index > span_start do strings.write_string(builder, value[span_start:index])
+			strings.write_escaped_rune(builder, r, '"')
+			_, width := utf8.encode_rune(r)
+			span_start = index + width
+		}
+		if span_start < len(value) do strings.write_string(builder, value[span_start:])
+		strings.write_string(builder, "\"")
+	}
 	if !first do strings.write_string(builder, ",")
 	strings.write_string(builder, "{label:")
-	fmt.sbprintf(builder, "%q", label)
+	write_quoted(builder, label, timing)
 	strings.write_string(builder, ",kind:")
-	fmt.sbprintf(builder, "%q", kind)
+	write_quoted(builder, kind, timing)
 	strings.write_string(builder, ",context:")
-	fmt.sbprintf(builder, "%q", entry_context)
+	write_quoted(builder, entry_context, timing)
 	strings.write_string(builder, ",href:")
-	fmt.sbprintf(builder, "%q", href)
+	write_quoted(builder, href, timing)
 	strings.write_string(builder, ",search:")
-	fmt.sbprintf(builder, "%q", search)
+	write_quoted(builder, search, timing)
 	strings.write_string(builder, "}")
 	return false
 }
 
-write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> string {
+write_assets :: proc(model: ^Model, output_root: string, assets: Assets, timing: ^Site_Index_Timing = nil) -> string {
+	static_assets_started := time.tick_now()
 	css_path := path_join({output_root, "assets", "site.css"})
 	js_path := path_join({output_root, "assets", "site.js"})
 	css_builder: strings.Builder
@@ -1782,6 +1870,8 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 	strings.write_string(&js_builder, SITE_JS)
 	strings.write_string(&js_builder, SITE_SETTINGS_JS)
 	if err := write_text_file(js_path, &js_builder); len(err) > 0 do return err
+	if timing != nil do timing.static_assets_ms = time.duration_milliseconds(time.tick_since(static_assets_started))
+	search_render_started := time.tick_now()
 	builder: strings.Builder
 	defer strings.builder_destroy(&builder)
 	strings.write_string(&builder, "window.VARDE_SEARCH_INDEX=[")
@@ -1798,7 +1888,9 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 			package_path,
 			strings.concatenate({pkg.name, " ", package_context}, context.temp_allocator),
 			first,
+			timing,
 		)
+		if timing != nil do timing.search_entries += 1
 		for file in pkg.files {
 			file_display_name := source_path_display(model, file.name)
 			file_context := strings.concatenate({package_context, " · ", file_display_name}, context.temp_allocator)
@@ -1810,7 +1902,9 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 				package_path,
 				strings.concatenate({file_display_name, " ", package_context}, context.temp_allocator),
 				first,
+				timing,
 			)
+			if timing != nil do timing.search_entries += 1
 			for entry in file.entries {
 				first = search_index_entry_write(
 					&builder,
@@ -1820,7 +1914,9 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 					strings.concatenate({package_path, "#", entry.anchor}, context.temp_allocator),
 					strings.concatenate({entry.name, " ", entry.signature, " ", file_context}, context.temp_allocator),
 					first,
+					timing,
 				)
+				if timing != nil do timing.search_entries += 1
 			}
 		}
 	}
@@ -1833,11 +1929,20 @@ write_assets :: proc(model: ^Model, output_root: string, assets: Assets) -> stri
 			strings.concatenate({"builtin-types/#builtin-", builtin.name}, context.temp_allocator),
 			strings.concatenate({builtin.name, " ", builtin.category, " ", builtin.description}, context.temp_allocator),
 			first,
+			timing,
 		)
+		if timing != nil do timing.search_entries += 1
 	}
 	strings.write_string(&builder, "];\n")
+	if timing != nil {
+		timing.search_render_ms = time.duration_milliseconds(time.tick_since(search_render_started))
+		timing.search_bytes = len(builder.buf)
+		timing.search_capacity = cap(builder.buf)
+	}
 	index_path := path_join({output_root, "assets", "search-index.js"})
+	search_write_started := time.tick_now()
 	if err := write_text_file(index_path, &builder); len(err) > 0 do return err
+	if timing != nil do timing.search_write_ms = time.duration_milliseconds(time.tick_since(search_write_started))
 	if len(assets.brand_png) > 0 {
 		if err := write_bytes_file(path_join({output_root, "assets", "brand-mark.png"}), assets.brand_png); len(err) > 0 do return err
 	}
@@ -1872,6 +1977,7 @@ build_canceled :: proc(cancel_requested: ^int) -> bool {
 
 build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^int = nil) -> Build_Result {
 	result := Build_Result{}
+	result.site_index_timing.measured = true
 	index_assets_started := time.tick_now()
 	if config_err := source_links_validate(config); len(config_err) > 0 { result.error_message = config_err; return result }
 	output_root, resolve_err := output_path_resolve(model.workspace_path, config.output_dir)
@@ -1888,13 +1994,19 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 	if err := os.make_directory_all(staging); err != nil { result.error_message = "Could not create export staging directory"; return result }
 	defer if os.exists(staging) do _ = os.remove_all(staging)
 	if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }
+	render_indexes_started := time.tick_now()
 	indexes := site_render_indexes_build(model)
+	result.site_index_timing.render_indexes_ms = time.duration_milliseconds(time.tick_since(render_indexes_started))
 	defer site_render_indexes_destroy(&indexes)
+	extensions_started := time.tick_now()
 	extensions, extension_err := site_extensions_load(model.workspace_path, config)
+	result.site_index_timing.extensions_ms = time.duration_milliseconds(time.tick_since(extensions_started))
 	defer site_extensions_destroy(&extensions)
 	if len(extension_err) > 0 { result.error_message = extension_err; return result }
-	if err := write_assets(model, staging, assets); len(err) > 0 { result.error_message = err; return result }
+	if err := write_assets(model, staging, assets, &result.site_index_timing); len(err) > 0 { result.error_message = err; return result }
+	overrides_started := time.tick_now()
 	if err := write_overrides_css(staging, output_root); len(err) > 0 { result.error_message = err; return result }
+	result.site_index_timing.overrides_ms = time.duration_milliseconds(time.tick_since(overrides_started))
 	runtime_timing_set(&result.timings, .Site_Index_Assets, time.duration_milliseconds(time.tick_since(index_assets_started)))
 	if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }
 	pages_started := time.tick_now()
@@ -1923,7 +2035,11 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 		if err := write_package_page(model, &indexes, &pkg, config, extensions, staging, &result.site_page_timing); len(err) > 0 { result.error_message = err; return result }
 		package_page_ms := time.duration_milliseconds(time.tick_since(package_page_started))
 		result.site_page_timing.package_page_count += 1
-		result.site_page_timing.package_page_max_ms = max(result.site_page_timing.package_page_max_ms, package_page_ms)
+		if package_page_ms > result.site_page_timing.package_page_max_ms {
+			result.site_page_timing.package_page_max_ms = package_page_ms
+			result.site_page_timing.package_page_max_path = pkg.relative_path
+			result.site_page_timing.package_page_max_entries = package_symbol_count(pkg)
+		}
 	}
 	result.site_page_timing.package_pages_ms = time.duration_milliseconds(time.tick_since(package_pages_started))
 	runtime_timing_set(&result.timings, .Site_Pages, time.duration_milliseconds(time.tick_since(pages_started)))
@@ -1945,6 +2061,22 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 test_output_path_rejects_escape :: proc(t: ^testing.T) {
 	_, err := output_path_resolve("/project", "../outside")
 	testing.expect(t, len(err) > 0, "relative path escapes should be rejected")
+}
+
+@(test)
+test_search_index_entry_uses_fmt_compatible_quoting :: proc(t: ^testing.T) {
+	builder: strings.Builder
+	defer strings.builder_destroy(&builder)
+	search_index_entry_write(&builder, "line\n\"quoted\"", "Kind", "context\tvalue", "path/#anchor", "snowman ☃", true)
+	expected: strings.Builder
+	defer strings.builder_destroy(&expected)
+	strings.write_string(&expected, "{label:"); fmt.sbprintf(&expected, "%q", "line\n\"quoted\"")
+	strings.write_string(&expected, ",kind:"); fmt.sbprintf(&expected, "%q", "Kind")
+	strings.write_string(&expected, ",context:"); fmt.sbprintf(&expected, "%q", "context\tvalue")
+	strings.write_string(&expected, ",href:"); fmt.sbprintf(&expected, "%q", "path/#anchor")
+	strings.write_string(&expected, ",search:"); fmt.sbprintf(&expected, "%q", "snowman ☃")
+	strings.write_string(&expected, "}")
+	testing.expect(t, strings.to_string(builder) == strings.to_string(expected), "direct search-index quoting should remain byte-compatible with fmt %q")
 }
 
 @(test)

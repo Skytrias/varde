@@ -54,11 +54,25 @@ print_site_page_timings :: proc(timing: varde.Site_Page_Timing) {
 	if !timing.measured do return
 	fmt.eprintf("varde_site_page_timing phase=index duration_ms=%.3f\n", timing.index_page_ms)
 	fmt.eprintf("varde_site_page_timing phase=builtin duration_ms=%.3f\n", timing.builtin_page_ms)
-	fmt.eprintf("varde_site_page_timing phase=packages duration_ms=%.3f count=%d max_ms=%.3f\n", timing.package_pages_ms, timing.package_page_count, timing.package_page_max_ms)
+	fmt.eprintf("varde_site_page_timing phase=packages duration_ms=%.3f count=%d max_ms=%.3f max_path=%q max_entries=%d\n", timing.package_pages_ms, timing.package_page_count, timing.package_page_max_ms, timing.package_page_max_path, timing.package_page_max_entries)
 	fmt.eprintf("varde_site_page_timing phase=package-tree-build duration_ms=%.3f calls=%d\n", timing.package_tree_build_ms, timing.package_tree_calls)
 	fmt.eprintf("varde_site_page_timing phase=package-tree-render duration_ms=%.3f calls=%d\n", timing.package_tree_render_ms, timing.package_tree_calls)
 	fmt.eprintf("varde_site_page_timing phase=group-entries duration_ms=%.3f calls=%d\n", timing.group_entries_ms, timing.group_entries_calls)
+	fmt.eprintf("varde_site_page_timing phase=package-content duration_ms=%.3f\n", timing.package_content_ms)
+	fmt.eprintf("varde_site_page_timing phase=package-toc duration_ms=%.3f\n", timing.package_toc_ms)
+	fmt.eprintf("varde_site_page_timing phase=signatures duration_ms=%.3f calls=%d bytes=%d tokens=%d identifiers=%d builtin_lookups=%d builtin_candidates=%d\n", timing.signature_ms, timing.signature_calls, timing.signature_bytes, timing.signature_tokens, timing.signature_identifiers, timing.builtin_lookup_calls, timing.builtin_candidates)
+	fmt.eprintf("varde_site_page_timing phase=doc-bodies duration_ms=%.3f calls=%d bytes=%d\n", timing.doc_body_ms, timing.doc_body_calls, timing.doc_body_bytes)
 	fmt.eprintf("varde_site_page_timing phase=package-write duration_ms=%.3f calls=%d\n", timing.package_write_ms, timing.package_write_calls)
+}
+
+print_site_index_timings :: proc(timing: varde.Site_Index_Timing) {
+	if !timing.measured do return
+	fmt.eprintf("varde_site_index_timing phase=render-indexes duration_ms=%.3f\n", timing.render_indexes_ms)
+	fmt.eprintf("varde_site_index_timing phase=extensions duration_ms=%.3f\n", timing.extensions_ms)
+	fmt.eprintf("varde_site_index_timing phase=static-assets duration_ms=%.3f\n", timing.static_assets_ms)
+	fmt.eprintf("varde_site_index_timing phase=search-render duration_ms=%.3f entries=%d bytes=%d capacity=%d quote_bulk=%d quote_fallback=%d\n", timing.search_render_ms, timing.search_entries, timing.search_bytes, timing.search_capacity, timing.search_quote_bulk, timing.search_quote_fallback)
+	fmt.eprintf("varde_site_index_timing phase=search-write duration_ms=%.3f\n", timing.search_write_ms)
+	fmt.eprintf("varde_site_index_timing phase=overrides duration_ms=%.3f\n", timing.overrides_ms)
 }
 
 print_usage :: proc() {
@@ -149,6 +163,7 @@ build_from_source :: proc(root_path, output_dir, emit_doc_path, target_os, targe
 	defer varde.Runtime_Build_Result_Destroy(&built)
 	print_timings(built.timings, total_ms)
 	print_lower_timings(built.lower_timing)
+	print_site_index_timings(built.site_index_timing)
 	print_site_page_timings(built.site_page_timing)
 	print_runtime_diagnostics(built)
 	if !built.ok { fmt.eprintf("Varde build failed: %s\n", built.error_message); return }
