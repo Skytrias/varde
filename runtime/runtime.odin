@@ -44,6 +44,13 @@ Runtime_Timings :: struct {
 	measured:    [RUNTIME_TIMING_PHASE_COUNT]bool,
 }
 
+Document_Write_Timing :: struct {
+	measured:     bool,
+	serialize_ms: f64,
+	file_ms:      f64,
+	bytes:        int,
+}
+
 runtime_timing_set :: proc(timings: ^Runtime_Timings, phase: Runtime_Timing_Phase, duration_ms: f64) {
 	if timings == nil do return
 	index := int(phase)
@@ -97,6 +104,7 @@ Runtime_Build_Result :: struct {
 	sloc:          int,
 	timings:       Runtime_Timings,
 	lower_timing:  extractor.Lower_Timing,
+	document_write_timing: Document_Write_Timing,
 	site_page_timing: Site_Page_Timing,
 	site_index_timing: Site_Index_Timing,
 	diagnostics:   [dynamic]Runtime_Diagnostic,
@@ -250,14 +258,22 @@ runtime_attached_config_validate :: proc(config: Config) -> string {
 	return ""
 }
 
-runtime_write_document :: proc(document: ^doc.Document, output_path: string) -> string {
+runtime_write_document :: proc(document: ^doc.Document, output_path: string, timing: ^Document_Write_Timing = nil) -> string {
+	serialize_started := time.tick_now()
 	data, write_err := doc.Write(document)
 	defer delete(data)
+	if timing != nil {
+		timing.measured = true
+		timing.serialize_ms = time.duration_milliseconds(time.tick_since(serialize_started))
+		timing.bytes = len(data)
+	}
 	if write_err.kind != .None do return fmt.tprintf("Could not serialize .odin-doc: %s", doc.error_string(write_err))
 	if directory := filepath.dir(output_path); len(directory) > 0 {
 		if directory_err := os.make_directory_all(directory); directory_err != nil && directory_err != .Exist do return fmt.tprintf("Could not create artifact directory: %v", directory_err)
 	}
+	file_started := time.tick_now()
 	if output_err := os.write_entire_file(output_path, data[:]); output_err != nil do return fmt.tprintf("Could not write .odin-doc: %v", output_err)
+	if timing != nil do timing.file_ms = time.duration_milliseconds(time.tick_since(file_started))
 	return ""
 }
 
@@ -406,7 +422,7 @@ Runtime_Build :: proc(request: Runtime_Build_Request, allocator: mem.Allocator =
 		if !runtime_finish_site(&result, &adapter.model, config, assets, request, allocator) do return result
 		if len(artifact_path) > 0 {
 			write_started := time.tick_now()
-			if artifact_err := runtime_write_document(&lowered.document, artifact_path); len(artifact_err) > 0 {
+			if artifact_err := runtime_write_document(&lowered.document, artifact_path, &result.document_write_timing); len(artifact_err) > 0 {
 				runtime_timing_set(&result.timings, .Document_Write, time.duration_milliseconds(time.tick_since(write_started)))
 				runtime_result_error(&result, artifact_err, allocator)
 				runtime_result_add_diagnostic(&result, .Artifact, artifact_path, 0, 0, artifact_err, allocator)

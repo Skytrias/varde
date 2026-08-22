@@ -14,6 +14,7 @@ import "core:slice"
 import "core:strings"
 import "core:sync"
 import "core:testing"
+import "core:thread"
 import "core:time"
 import "core:unicode/utf8"
 import tokenizer "core:odin/tokenizer"
@@ -193,6 +194,7 @@ Site_Page_Timing :: struct {
 	package_page_max_path: string,
 	package_page_max_entries: int,
 	package_page_count:    int,
+	package_page_workers:  int,
 	package_tree_build_ms: f64,
 	package_tree_render_ms: f64,
 	package_tree_calls:    int,
@@ -214,6 +216,22 @@ Site_Page_Timing :: struct {
 	doc_body_bytes:        int,
 	package_write_ms:      f64,
 	package_write_calls:   int,
+}
+
+SITE_PAGE_TASK_ERROR_CAPACITY :: 256
+
+Site_Page_Task :: struct {
+	model:            ^Model,
+	indexes:          ^Site_Render_Indexes,
+	pkg:              ^Package,
+	config:           Config,
+	extensions:       Site_Extensions,
+	output_root:      string,
+	cancel_requested: ^int,
+	timing:           Site_Page_Timing,
+	duration_ms:      f64,
+	error_bytes:      [SITE_PAGE_TASK_ERROR_CAPACITY]u8,
+	error_length:     int,
 }
 
 config_default :: proc(workspace_path, title, description: string) -> Config {
@@ -1436,6 +1454,140 @@ write_builtin_types_page :: proc(model: ^Model, config: Config, extensions: Site
 	return write_text_file(page_path, &builder)
 }
 
+site_page_task_error_set :: proc(task: ^Site_Page_Task, message: string) {
+	if task == nil || len(message) == 0 do return
+	task.error_length = min(len(message), len(task.error_bytes))
+	copy(task.error_bytes[:task.error_length], message[:task.error_length])
+}
+
+site_page_task_run :: proc(pool_task: thread.Task) {
+	task := cast(^Site_Page_Task)pool_task.data
+	if task == nil do return
+	if build_canceled(task.cancel_requested) {
+		site_page_task_error_set(task, "Build canceled")
+		return
+	}
+
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena, block_allocator=pool_task.allocator, array_allocator=pool_task.allocator)
+	defer mem.dynamic_arena_destroy(&arena)
+	task_allocator := mem.dynamic_arena_allocator(&arena)
+	context.allocator = task_allocator
+	context.temp_allocator = task_allocator
+
+	started := time.tick_now()
+	if err := write_package_page(task.model, task.indexes, task.pkg, task.config, task.extensions, task.output_root, &task.timing); len(err) > 0 {
+		site_page_task_error_set(task, err)
+	}
+	task.duration_ms = time.duration_milliseconds(time.tick_since(started))
+}
+
+site_page_timing_add :: proc(total: ^Site_Page_Timing, item: Site_Page_Timing) {
+	total.package_tree_build_ms += item.package_tree_build_ms
+	total.package_tree_render_ms += item.package_tree_render_ms
+	total.package_tree_calls += item.package_tree_calls
+	total.group_entries_ms += item.group_entries_ms
+	total.group_entries_calls += item.group_entries_calls
+	total.package_content_ms += item.package_content_ms
+	total.package_toc_ms += item.package_toc_ms
+	total.signature_ms += item.signature_ms
+	total.signature_calls += item.signature_calls
+	total.signature_bytes += item.signature_bytes
+	total.signature_tokens += item.signature_tokens
+	total.signature_identifiers += item.signature_identifiers
+	total.builtin_lookup_calls += item.builtin_lookup_calls
+	total.builtin_candidates += item.builtin_candidates
+	total.entry_lookup_calls += item.entry_lookup_calls
+	total.package_index_lookups += item.package_index_lookups
+	total.doc_body_ms += item.doc_body_ms
+	total.doc_body_calls += item.doc_body_calls
+	total.doc_body_bytes += item.doc_body_bytes
+	total.package_write_ms += item.package_write_ms
+	total.package_write_calls += item.package_write_calls
+}
+
+write_package_pages_parallel :: proc(
+	model: ^Model,
+	indexes: ^Site_Render_Indexes,
+	config: Config,
+	extensions: Site_Extensions,
+	output_root: string,
+	cancel_requested: ^int,
+	timing: ^Site_Page_Timing,
+) -> string {
+	package_count := 0
+	for pkg in model.packages {
+		if site_package_is_renderable(pkg) do package_count += 1
+	}
+	if package_count == 0 do return ""
+
+	worker_count := min(max(1, os.get_processor_core_count()), package_count)
+	timing.package_page_workers = worker_count
+	if worker_count == 1 {
+		for &pkg in model.packages {
+			if !site_package_is_renderable(pkg) do continue
+			if build_canceled(cancel_requested) do return "Build canceled"
+			page_started := time.tick_now()
+			if err := write_package_page(model, indexes, &pkg, config, extensions, output_root, timing); len(err) > 0 do return err
+			page_ms := time.duration_milliseconds(time.tick_since(page_started))
+			timing.package_page_count += 1
+			if page_ms > timing.package_page_max_ms {
+				timing.package_page_max_ms = page_ms
+				timing.package_page_max_path = pkg.relative_path
+				timing.package_page_max_entries = package_symbol_count(pkg)
+			}
+		}
+		return ""
+	}
+
+	tasks := make([]Site_Page_Task, package_count)
+	defer delete(tasks)
+	task_index := 0
+	for &pkg in model.packages {
+		if !site_package_is_renderable(pkg) do continue
+		page_path := path_join({output_root, package_output_path(pkg)})
+		if err := ensure_directory(filepath.dir(page_path)); len(err) > 0 do return err
+		tasks[task_index] = Site_Page_Task{
+			model = model,
+			indexes = indexes,
+			pkg = &pkg,
+			config = config,
+			extensions = extensions,
+			output_root = output_root,
+			cancel_requested = cancel_requested,
+		}
+		task_index += 1
+	}
+
+	shared_allocator_state: mem.Mutex_Allocator
+	mem.mutex_allocator_init(&shared_allocator_state, context.allocator)
+	shared_allocator := mem.mutex_allocator(&shared_allocator_state)
+	pool: thread.Pool
+	// pool_finish also renders tasks on this thread, so one fewer background
+	// worker keeps total CPU concurrency bounded by the detected core count.
+	thread.pool_init(&pool, shared_allocator, worker_count - 1)
+	defer thread.pool_destroy(&pool)
+	for &task, index in tasks {
+		thread.pool_add_task(&pool, shared_allocator, site_page_task_run, &task, index)
+	}
+	thread.pool_start(&pool)
+	thread.pool_finish(&pool)
+
+	for &task in tasks {
+		site_page_timing_add(timing, task.timing)
+		timing.package_page_count += 1
+		if task.duration_ms > timing.package_page_max_ms {
+			timing.package_page_max_ms = task.duration_ms
+			timing.package_page_max_path = task.pkg.relative_path
+			timing.package_page_max_entries = package_symbol_count(task.pkg^)
+		}
+		if task.error_length > 0 {
+			return strings.clone(string(task.error_bytes[:task.error_length]), context.temp_allocator)
+		}
+	}
+	return ""
+}
+
 package_symbol_count :: proc(pkg: Package) -> int {
 	count := 0
 	for file in pkg.files do count += len(file.entries)
@@ -2062,19 +2214,7 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 	if err := write_builtin_types_page(model, config, extensions, staging); len(err) > 0 { result.error_message = err; return result }
 	result.site_page_timing.builtin_page_ms = time.duration_milliseconds(time.tick_since(builtin_page_started))
 	package_pages_started := time.tick_now()
-	for &pkg in model.packages {
-		if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }
-		if !site_package_is_renderable(pkg) do continue
-		package_page_started := time.tick_now()
-		if err := write_package_page(model, &indexes, &pkg, config, extensions, staging, &result.site_page_timing); len(err) > 0 { result.error_message = err; return result }
-		package_page_ms := time.duration_milliseconds(time.tick_since(package_page_started))
-		result.site_page_timing.package_page_count += 1
-		if package_page_ms > result.site_page_timing.package_page_max_ms {
-			result.site_page_timing.package_page_max_ms = package_page_ms
-			result.site_page_timing.package_page_max_path = pkg.relative_path
-			result.site_page_timing.package_page_max_entries = package_symbol_count(pkg)
-		}
-	}
+	if err := write_package_pages_parallel(model, &indexes, config, extensions, staging, cancel_requested, &result.site_page_timing); len(err) > 0 { result.error_message = err; return result }
 	result.site_page_timing.package_pages_ms = time.duration_milliseconds(time.tick_since(package_pages_started))
 	runtime_timing_set(&result.timings, .Site_Pages, time.duration_milliseconds(time.tick_since(pages_started)))
 	publish_started := time.tick_now()
