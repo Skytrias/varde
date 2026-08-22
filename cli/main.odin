@@ -39,6 +39,17 @@ print_timings :: proc(timings: varde.Runtime_Timings, total_ms: f64) {
 	fmt.eprintf("varde_timing phase=total duration_ms=%.3f\n", total_ms)
 }
 
+print_lower_timings :: proc(timing: extractor.Lower_Timing) {
+	if !timing.measured do return
+	fmt.eprintf("varde_lower_timing phase=emit duration_ms=%.3f\n", timing.emit_ms)
+	fmt.eprintf("varde_lower_timing phase=aliases duration_ms=%.3f\n", timing.aliases_ms)
+	fmt.eprintf("varde_lower_timing phase=constants duration_ms=%.3f\n", timing.constants_ms)
+	fmt.eprintf("varde_lower_timing phase=procedure-groups duration_ms=%.3f\n", timing.procedure_groups_ms)
+	fmt.eprintf("varde_lower_timing phase=named-types duration_ms=%.3f\n", timing.named_types_ms)
+	fmt.eprintf("varde_lower_timing phase=finalize duration_ms=%.3f\n", timing.finalize_ms)
+	fmt.eprintf("varde_lower_workload packages=%d files=%d declarations=%d entities=%d types=%d pending_aliases=%d pending_constants=%d pending_groups=%d named_type_candidates=%d named_type_entity_scans=%d named_type_lookups=%d named_type_index_names=%d named_type_duplicates=%d diagnostics=%d\n", timing.package_count, timing.file_count, timing.declaration_count, timing.entity_count, timing.type_count, timing.pending_alias_count, timing.pending_constant_count, timing.pending_group_count, timing.named_type_candidates, timing.named_type_entity_scans, timing.named_type_lookups, timing.named_type_index_names, timing.named_type_duplicates, timing.diagnostic_count)
+}
+
 print_usage :: proc() {
 	fmt.eprintln("Usage:")
 	fmt.eprintln("  varde inspect <file.odin-doc> [...more.odin-doc]")
@@ -104,6 +115,7 @@ extract_source :: proc(root_path, output_path, target_os, target_arch: string, i
 	if !write_document_file(&result.document, output_path) do return
 	timing_record(&timings, .Document_Write, time.duration_milliseconds(time.tick_since(write_started)))
 	print_timings(timings, time.duration_milliseconds(time.tick_since(total_started)))
+	print_lower_timings(result.timing)
 	status := "complete"
 	if !result.complete do status = "incomplete (explicitly allowed)"
 	fmt.printf("Wrote %s .odin-doc with %d packages, %d declarations, and %d SLOC to %s\n", status, len(result.document.packages)-1, len(result.document.entities)-1, workspace.sloc, output_path)
@@ -125,6 +137,7 @@ build_from_source :: proc(root_path, output_dir, emit_doc_path, target_os, targe
 	total_ms := time.duration_milliseconds(time.tick_since(total_started))
 	defer varde.Runtime_Build_Result_Destroy(&built)
 	print_timings(built.timings, total_ms)
+	print_lower_timings(built.lower_timing)
 	print_runtime_diagnostics(built)
 	if !built.ok { fmt.eprintf("Varde build failed: %s\n", built.error_message); return }
 	status := "complete"

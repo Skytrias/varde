@@ -96,6 +96,7 @@ Runtime_Build_Result :: struct {
 	entry_count:   int,
 	sloc:          int,
 	timings:       Runtime_Timings,
+	lower_timing:  extractor.Lower_Timing,
 	diagnostics:   [dynamic]Runtime_Diagnostic,
 	error_message: string,
 }
@@ -366,6 +367,7 @@ Runtime_Build :: proc(request: Runtime_Build_Request, allocator: mem.Allocator =
 		runtime_append_extraction_diagnostics(&result, source_workspace, allocator)
 		lowered := extractor.Lower(&source_workspace, {incomplete_policy = request.allow_incomplete ? .Emit : .Reject}, allocator)
 		runtime_timing_set(&result.timings, .Document_Lower, lowered.duration_ms)
+		result.lower_timing = lowered.timing
 		defer extractor.Lower_Result_Destroy(&lowered, allocator)
 		runtime_append_lowering_diagnostics(&result, lowered, allocator)
 		result.complete = lowered.complete
@@ -482,6 +484,7 @@ test_runtime_build_publishes_site_and_sidecar :: proc(t: ^testing.T) {
 	for measured, phase_index in result.timings.measured {
 		testing.expectf(t, measured, "source build with sidecar should measure timing phase %d", phase_index)
 	}
+	testing.expect(t, result.lower_timing.measured, "source build should report detailed lowering timings")
 	testing.expect(t, os.exists(path_join({root, "dist", "docs", "index.html"})), "runtime build should publish a static site")
 	artifact_path := path_join({root, "dist", "docs", "demo.odin-doc"})
 	testing.expect(t, os.exists(artifact_path), "runtime build should publish its requested sidecar")

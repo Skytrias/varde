@@ -19,6 +19,32 @@ Lower_Options :: struct {
 	incomplete_policy: Incomplete_Policy,
 }
 
+// Lower_Timing splits document lowering at its stable pass boundaries. Counts
+// make scaling changes visible without instrumenting every declaration.
+Lower_Timing :: struct {
+	measured:                bool,
+	emit_ms:                 f64,
+	aliases_ms:              f64,
+	constants_ms:            f64,
+	procedure_groups_ms:     f64,
+	named_types_ms:          f64,
+	finalize_ms:             f64,
+	package_count:           int,
+	file_count:              int,
+	declaration_count:       int,
+	entity_count:            int,
+	type_count:              int,
+	pending_alias_count:     int,
+	pending_constant_count:  int,
+	pending_group_count:     int,
+	named_type_candidates:   int,
+	named_type_entity_scans: int,
+	named_type_lookups:      int,
+	named_type_index_names:  int,
+	named_type_duplicates:   int,
+	diagnostic_count:        int,
+}
+
 Lower_Diagnostic :: struct {
 	path:    string,
 	line:    int,
@@ -32,6 +58,7 @@ Lower_Result :: struct {
 	diagnostics: [dynamic]Lower_Diagnostic,
 	complete:    bool,
 	duration_ms: f64,
+	timing:      Lower_Timing,
 }
 
 Alias_Pending :: struct {
@@ -1187,23 +1214,37 @@ constant_initializer_is_structural_type :: proc(initializer: string) -> bool {
 // name has exactly one public type definition in this extracted document.
 // This deliberately leaves duplicate and import-qualified names unresolved:
 // choosing one by iteration order would fabricate semantic information.
-resolve_unique_named_types :: proc(document: ^doc.Document) {
+resolve_unique_named_types :: proc(document: ^doc.Document) -> (candidate_count, entity_scan_count, lookup_count, index_name_count, duplicate_name_count: int) {
+	if document == nil do return
+	// Entity index zero is reserved by doc-format, so it is also a safe
+	// duplicate-name sentinel. The map is never iterated: document order still
+	// controls every emitted definition edge.
+	unique_entity_by_name := make(map[string]u32, len(document.entities), context.temp_allocator)
+	defer delete(unique_entity_by_name)
+	for entity, entity_index in document.entities[1:] {
+		entity_scan_count += 1
+		if entity.kind != 3 || len(entity.name) == 0 do continue
+		prior, exists := unique_entity_by_name[entity.name]
+		if !exists {
+			unique_entity_by_name[entity.name] = u32(entity_index + 1)
+		} else if prior != 0 {
+			unique_entity_by_name[entity.name] = 0
+			duplicate_name_count += 1
+		}
+	}
+	index_name_count = len(unique_entity_by_name)
 	for type_index := 1; type_index < len(document.types); type_index += 1 {
 		typ := &document.types[type_index]
 		if typ.kind != 2 || len(typ.name) == 0 || len(typ.entities) > 0 do continue
-		match_index := u32(0)
-		match_count := 0
-		for entity, entity_index in document.entities[1:] {
-			if entity.kind == 3 && entity.name == typ.name {
-				match_index = u32(entity_index + 1)
-				match_count += 1
-			}
-		}
-		if match_count == 1 {
+		candidate_count += 1
+		lookup_count += 1
+		match_index, exists := unique_entity_by_name[typ.name]
+		if exists && match_index != 0 {
 			append(&typ.entities, match_index)
 			append(&typ.types, document.entities[match_index].type)
 		}
 	}
+	return
 }
 
 type_is_resolved :: proc(document: ^doc.Document, type_index: u32, depth := 0) -> bool {
@@ -1240,6 +1281,7 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 	started := time.tick_now()
 	result := Lower_Result{document = doc.Document_Init(allocator), diagnostics = make([dynamic]Lower_Diagnostic, 0, 8, allocator), complete = true}
 	if workspace == nil {
+		result.timing.measured = true
 		result.duration_ms = time.duration_milliseconds(time.tick_since(started))
 		return result
 	}
@@ -1249,6 +1291,8 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 	defer delete(pending_groups)
 	pending_constants := make([dynamic]Constant_Pending, 0, 16, allocator)
 	defer delete(pending_constants)
+	result.timing.package_count = len(workspace.packages)
+	emit_started := time.tick_now()
 	for source_package in workspace.packages {
 		package_index := u32(len(result.document.packages))
 		out_package := doc.Package{
@@ -1315,15 +1359,37 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 		}
 		append(&result.document.packages, out_package)
 	}
+	result.timing.emit_ms = time.duration_milliseconds(time.tick_since(emit_started))
+	result.timing.pending_alias_count = len(pending_aliases)
+	result.timing.pending_constant_count = len(pending_constants)
+	result.timing.pending_group_count = len(pending_groups)
+	for source_package in workspace.packages {
+		result.timing.file_count += len(source_package.files)
+		for file in source_package.files do result.timing.declaration_count += len(file.declarations)
+	}
+	phase_started := time.tick_now()
 	resolve_direct_aliases(&result.document, pending_aliases[:], &result, allocator)
+	result.timing.aliases_ms = time.duration_milliseconds(time.tick_since(phase_started))
+	phase_started = time.tick_now()
 	resolve_local_constant_expressions(&result.document, pending_constants[:], &result, allocator)
+	result.timing.constants_ms = time.duration_milliseconds(time.tick_since(phase_started))
+	phase_started = time.tick_now()
 	resolve_procedure_groups(&result.document, pending_groups[:], &result, allocator)
-	resolve_unique_named_types(&result.document)
+	result.timing.procedure_groups_ms = time.duration_milliseconds(time.tick_since(phase_started))
+	phase_started = time.tick_now()
+	result.timing.named_type_candidates, result.timing.named_type_entity_scans, result.timing.named_type_lookups, result.timing.named_type_index_names, result.timing.named_type_duplicates = resolve_unique_named_types(&result.document)
+	result.timing.named_types_ms = time.duration_milliseconds(time.tick_since(phase_started))
+	phase_started = time.tick_now()
 	discard_resolved_named_diagnostics(&result, allocator)
+	result.timing.entity_count = len(result.document.entities)-1
+	result.timing.type_count = len(result.document.types)-1
+	result.timing.diagnostic_count = len(result.diagnostics)
 	if !result.complete && options.incomplete_policy == .Reject {
 		doc.Document_Destroy(&result.document, allocator)
 		result.document = doc.Document_Init(allocator)
 	}
+	result.timing.finalize_ms = time.duration_milliseconds(time.tick_since(phase_started))
+	result.timing.measured = true
 	result.duration_ms = time.duration_milliseconds(time.tick_since(started))
 	return result
 }

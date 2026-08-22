@@ -17,6 +17,26 @@ document_entity_by_name :: proc(document: ^doc.Document, name: string) -> ^doc.E
 }
 
 @(test)
+resolve_unique_named_types_keeps_duplicate_names_unresolved :: proc(t: ^testing.T) {
+	document := doc.Document_Init()
+	defer doc.Document_Destroy(&document)
+	append(&document.types, new_type(1, "int", context.allocator))
+	append(&document.entities, doc.Entity{kind = 3, name = "Unique", type = 1})
+	append(&document.entities, doc.Entity{kind = 3, name = "Duplicate", type = 1})
+	append(&document.entities, doc.Entity{kind = 3, name = "Duplicate", type = 1})
+	append(&document.types, new_type(2, "Unique", context.allocator))
+	append(&document.types, new_type(2, "Duplicate", context.allocator))
+	append(&document.types, new_type(2, "Missing", context.allocator))
+
+	candidates, scans, lookups, names, duplicates := resolve_unique_named_types(&document)
+	testing.expect(t, candidates == 3 && scans == 3 && lookups == 3, "resolver workload counters should describe the indexed pass")
+	testing.expect(t, names == 2 && duplicates == 1, "the name index should retain one duplicate-name sentinel")
+	testing.expect(t, len(document.types[2].entities) == 1 && document.types[2].entities[0] == 1, "a globally unique public type name should resolve to its declaration")
+	testing.expect(t, len(document.types[3].entities) == 0, "duplicate public type names must remain unresolved")
+	testing.expect(t, len(document.types[4].entities) == 0, "missing public type names must remain unresolved")
+}
+
+@(test)
 source_sloc_ignores_blank_and_comment_only_lines :: proc(t: ^testing.T) {
 	source := "\n// heading\nvalue := 1 // trailing comment\n/* block\ncomment */\n/* inline */ value := 2\n"
 	testing.expect(t, source_sloc(source) == 2)
