@@ -4,9 +4,40 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strconv"
+import "core:time"
 import doc "../doc_format"
 import extractor "../extractor"
 import varde "../runtime"
+
+TIMING_PHASE_LABELS :: [varde.RUNTIME_TIMING_PHASE_COUNT]string{
+	"source.discovery",
+	"input.parse-read",
+	"source.dependencies",
+	"document.lower",
+	"document.write",
+	"document.merge",
+	"site.render-model",
+	"site.index-assets",
+	"site.pages",
+	"site.publish",
+}
+
+timing_record :: proc(timings: ^varde.Runtime_Timings, phase: varde.Runtime_Timing_Phase, duration_ms: f64) {
+	index := int(phase)
+	timings.duration_ms[index] = duration_ms
+	timings.measured[index] = true
+}
+
+print_timings :: proc(timings: varde.Runtime_Timings, total_ms: f64) {
+	for label, index in TIMING_PHASE_LABELS {
+		if timings.measured[index] {
+			fmt.eprintf("varde_timing phase=%s duration_ms=%.3f\n", label, timings.duration_ms[index])
+		} else {
+			fmt.eprintf("varde_timing phase=%s skipped=true\n", label)
+		}
+	}
+	fmt.eprintf("varde_timing phase=total duration_ms=%.3f\n", total_ms)
+}
 
 print_usage :: proc() {
 	fmt.eprintln("Usage:")
@@ -57,19 +88,29 @@ print_source_diagnostics :: proc(workspace: extractor.Workspace, result: extract
 }
 
 extract_source :: proc(root_path, output_path, target_os, target_arch: string, include_tests, allow_incomplete: bool) {
+	total_started := time.tick_now()
+	timings: varde.Runtime_Timings
 	workspace := extractor.Extract(extractor.Config{root_path = root_path, target_os = target_os, target_arch = target_arch, include_test_files = include_tests})
+	timing_record(&timings, .Source_Discovery, workspace.timing.discovery_ms)
+	timing_record(&timings, .Input_Parse_Read, workspace.timing.parse_read_ms)
+	timing_record(&timings, .Source_Dependencies, workspace.timing.dependency_ms)
 	defer extractor.Destroy(&workspace)
 	result := extractor.Lower(&workspace, {incomplete_policy = allow_incomplete ? .Emit : .Reject})
+	timing_record(&timings, .Document_Lower, result.duration_ms)
 	defer extractor.Lower_Result_Destroy(&result)
 	print_source_diagnostics(workspace, result)
 	if !result.complete && !allow_incomplete { fmt.eprintln("Refusing to emit an incomplete .odin-doc. Fix diagnostics or pass --allow-incomplete explicitly."); return }
+	write_started := time.tick_now()
 	if !write_document_file(&result.document, output_path) do return
+	timing_record(&timings, .Document_Write, time.duration_milliseconds(time.tick_since(write_started)))
+	print_timings(timings, time.duration_milliseconds(time.tick_since(total_started)))
 	status := "complete"
 	if !result.complete do status = "incomplete (explicitly allowed)"
 	fmt.printf("Wrote %s .odin-doc with %d packages, %d declarations, and %d SLOC to %s\n", status, len(result.document.packages)-1, len(result.document.entities)-1, workspace.sloc, output_path)
 }
 
 build_from_source :: proc(root_path, output_dir, emit_doc_path, target_os, target_arch, project_config_path: string, include_tests, allow_incomplete: bool) {
+	total_started := time.tick_now()
 	built := varde.Runtime_Build({
 		source_path = root_path,
 		project_config_path = project_config_path,
@@ -81,7 +122,9 @@ build_from_source :: proc(root_path, output_dir, emit_doc_path, target_os, targe
 		allow_incomplete = allow_incomplete,
 		load_project_config = true,
 	})
+	total_ms := time.duration_milliseconds(time.tick_since(total_started))
 	defer varde.Runtime_Build_Result_Destroy(&built)
+	print_timings(built.timings, total_ms)
 	print_runtime_diagnostics(built)
 	if !built.ok { fmt.eprintf("Varde build failed: %s\n", built.error_message); return }
 	status := "complete"
@@ -154,6 +197,7 @@ inspect :: proc(paths: []string) {
 }
 
 build_from_documents :: proc(paths: []string, workspace_path, output_dir, project_config_path: string, sloc: int) {
+	total_started := time.tick_now()
 	result := varde.Runtime_Build({
 		document_paths = paths,
 		workspace_path = workspace_path,
@@ -162,7 +206,9 @@ build_from_documents :: proc(paths: []string, workspace_path, output_dir, projec
 		load_project_config = true,
 		document_sloc = sloc,
 	})
+	total_ms := time.duration_milliseconds(time.tick_since(total_started))
 	defer varde.Runtime_Build_Result_Destroy(&result)
+	print_timings(result.timings, total_ms)
 	print_runtime_diagnostics(result)
 	if !result.ok {
 		fmt.eprintf("Varde build failed: %s\n", result.error_message)

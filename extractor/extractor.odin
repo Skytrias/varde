@@ -8,6 +8,7 @@ import "core:os"
 import "core:path/filepath"
 import "core:slice"
 import "core:strings"
+import "core:time"
 
 // Config selects a deterministic source view. Empty target fields use the
 // host defaults; callers building releases should set both explicitly.
@@ -83,6 +84,15 @@ Workspace :: struct {
 	packages:    [dynamic]Package,
 	diagnostics: [dynamic]Diagnostic,
 	sloc:        int,
+	timing:      Extract_Timing,
+}
+
+// Extract_Timing exposes the coarse source costs needed for end-to-end build
+// profiling. These phases deliberately stop before document lowering.
+Extract_Timing :: struct {
+	discovery_ms:  f64,
+	parse_read_ms: f64,
+	dependency_ms: f64,
 }
 
 // Destroy releases all data owned by Extract. Slices stored in declarations
@@ -574,10 +584,12 @@ detect_cycles :: proc(workspace: ^Workspace, allocator: mem.Allocator) {
 // invokes an external compiler or accepts an Odin executable path.
 Extract :: proc(config: Config, allocator: mem.Allocator = context.allocator) -> Workspace {
 	workspace := Workspace{packages = make([dynamic]Package, 0, 8, allocator), diagnostics = make([dynamic]Diagnostic, 0, 8, allocator)}
+	discovery_started := time.tick_now()
 	root, root_err := os.get_absolute_path(config.root_path, context.temp_allocator)
 	if root_err != nil {
 		workspace.root_path = strings.clone(config.root_path, allocator)
 		add_diagnostic(&workspace, .Discovery, config.root_path, 0, 0, "could not resolve source root", allocator)
+		workspace.timing.discovery_ms = time.duration_milliseconds(time.tick_since(discovery_started))
 		return workspace
 	}
 	workspace.root_path = strings.clone(root, allocator)
@@ -604,6 +616,8 @@ Extract :: proc(config: Config, allocator: mem.Allocator = context.allocator) ->
 		os.walker_destroy(&w)
 	}
 	slice.sort_by(paths[:], source_file_less)
+	workspace.timing.discovery_ms = time.duration_milliseconds(time.tick_since(discovery_started))
+	parse_started := time.tick_now()
 	for path in paths {
 		data, read_err := os.read_entire_file(path, context.temp_allocator)
 		if read_err != nil { add_diagnostic(&workspace, .Discovery, path, 0, 0, "could not read source file", allocator); continue }
@@ -624,7 +638,10 @@ Extract :: proc(config: Config, allocator: mem.Allocator = context.allocator) ->
 		}
 		append(&workspace.packages[package_index].files, file)
 	}
+	workspace.timing.parse_read_ms = time.duration_milliseconds(time.tick_since(parse_started))
+	dependency_started := time.tick_now()
 	resolve_imports(&workspace, allocator)
 	detect_cycles(&workspace, allocator)
+	workspace.timing.dependency_ms = time.duration_milliseconds(time.tick_since(dependency_started))
 	return workspace
 }

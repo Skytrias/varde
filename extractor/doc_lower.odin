@@ -4,6 +4,7 @@ import "core:mem"
 import "core:strings"
 import "core:fmt"
 import "core:strconv"
+import "core:time"
 import doc "../doc_format"
 
 // Incomplete_Policy makes the source-mode contract explicit. A full semantic
@@ -30,6 +31,7 @@ Lower_Result :: struct {
 	document:    doc.Document,
 	diagnostics: [dynamic]Lower_Diagnostic,
 	complete:    bool,
+	duration_ms: f64,
 }
 
 Alias_Pending :: struct {
@@ -1235,8 +1237,12 @@ discard_resolved_named_diagnostics :: proc(result: ^Lower_Result, allocator: mem
 // and expressions whose type cannot be established record a diagnostic and
 // mark the result incomplete.
 Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allocator = context.allocator) -> Lower_Result {
+	started := time.tick_now()
 	result := Lower_Result{document = doc.Document_Init(allocator), diagnostics = make([dynamic]Lower_Diagnostic, 0, 8, allocator), complete = true}
-	if workspace == nil do return result
+	if workspace == nil {
+		result.duration_ms = time.duration_milliseconds(time.tick_since(started))
+		return result
+	}
 	pending_aliases := make([dynamic]Alias_Pending, 0, 8, allocator)
 	defer delete(pending_aliases)
 	pending_groups := make([dynamic]Procedure_Group_Pending, 0, 8, allocator)
@@ -1318,5 +1324,6 @@ Lower :: proc(workspace: ^Workspace, options: Lower_Options, allocator: mem.Allo
 		doc.Document_Destroy(&result.document, allocator)
 		result.document = doc.Document_Init(allocator)
 	}
+	result.duration_ms = time.duration_milliseconds(time.tick_since(started))
 	return result
 }

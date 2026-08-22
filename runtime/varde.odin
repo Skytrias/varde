@@ -14,6 +14,7 @@ import "core:slice"
 import "core:strings"
 import "core:sync"
 import "core:testing"
+import "core:time"
 import tokenizer "core:odin/tokenizer"
 
 SITE_CONFIG_FILE_NAME :: "varde.json"
@@ -161,6 +162,7 @@ Build_Result :: struct {
 	package_count:   int,
 	entry_count:     int,
 	error_message:   string,
+	timings:         Runtime_Timings,
 }
 
 config_default :: proc(workspace_path, title, description: string) -> Config {
@@ -1834,6 +1836,7 @@ build_canceled :: proc(cancel_requested: ^int) -> bool {
 
 build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^int = nil) -> Build_Result {
 	result := Build_Result{}
+	index_assets_started := time.tick_now()
 	if config_err := source_links_validate(config); len(config_err) > 0 { result.error_message = config_err; return result }
 	output_root, resolve_err := output_path_resolve(model.workspace_path, config.output_dir)
 	if len(resolve_err) > 0 { result.error_message = resolve_err; return result }
@@ -1856,7 +1859,9 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 	if len(extension_err) > 0 { result.error_message = extension_err; return result }
 	if err := write_assets(model, staging, assets); len(err) > 0 { result.error_message = err; return result }
 	if err := write_overrides_css(staging, output_root); len(err) > 0 { result.error_message = err; return result }
+	runtime_timing_set(&result.timings, .Site_Index_Assets, time.duration_milliseconds(time.tick_since(index_assets_started)))
 	if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }
+	pages_started := time.tick_now()
 	index_config := config
 	if len(assets.brand_png) == 0 {
 		index_config.include_brand_artwork = false
@@ -1874,6 +1879,8 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 		if !site_package_is_renderable(pkg) do continue
 		if err := write_package_page(model, &indexes, &pkg, config, extensions, staging); len(err) > 0 { result.error_message = err; return result }
 	}
+	runtime_timing_set(&result.timings, .Site_Pages, time.duration_milliseconds(time.tick_since(pages_started)))
+	publish_started := time.tick_now()
 	if err := write_manifest(staging, config, model); len(err) > 0 { result.error_message = err; return result }
 	if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }
 	if os.exists(output_root) { if err := os.remove_all(output_root); err != nil { result.error_message = "Could not replace prior Varde site output"; return result } }
@@ -1883,6 +1890,7 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 	result.output_path = output_root
 	result.package_count = render_stats.package_count
 	result.entry_count = render_stats.entry_count
+	runtime_timing_set(&result.timings, .Site_Publish, time.duration_milliseconds(time.tick_since(publish_started)))
 	return result
 }
 

@@ -8,6 +8,7 @@ import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "core:testing"
+import "core:time"
 import doc "../doc_format"
 import extractor "../extractor"
 
@@ -18,6 +19,36 @@ Runtime_Diagnostic_Stage :: enum {
 	Merge,
 	Build,
 	Artifact,
+}
+
+// Runtime_Timing_Phase is intentionally coarse: these ten sections cover the
+// source-to-document path and the document-to-static-site path without adding
+// per-declaration instrumentation noise.
+Runtime_Timing_Phase :: enum {
+	Source_Discovery,
+	Input_Parse_Read,
+	Source_Dependencies,
+	Document_Lower,
+	Document_Write,
+	Document_Merge,
+	Render_Model,
+	Site_Index_Assets,
+	Site_Pages,
+	Site_Publish,
+}
+
+RUNTIME_TIMING_PHASE_COUNT :: 10
+
+Runtime_Timings :: struct {
+	duration_ms: [RUNTIME_TIMING_PHASE_COUNT]f64,
+	measured:    [RUNTIME_TIMING_PHASE_COUNT]bool,
+}
+
+runtime_timing_set :: proc(timings: ^Runtime_Timings, phase: Runtime_Timing_Phase, duration_ms: f64) {
+	if timings == nil do return
+	index := int(phase)
+	timings.duration_ms[index] = duration_ms
+	timings.measured[index] = true
 }
 
 Runtime_Diagnostic :: struct {
@@ -64,6 +95,7 @@ Runtime_Build_Result :: struct {
 	file_count:    int,
 	entry_count:   int,
 	sloc:          int,
+	timings:       Runtime_Timings,
 	diagnostics:   [dynamic]Runtime_Diagnostic,
 	error_message: string,
 }
@@ -227,6 +259,12 @@ runtime_write_document :: proc(document: ^doc.Document, output_path: string) -> 
 
 runtime_finish_site :: proc(result: ^Runtime_Build_Result, model: ^Model, config: Config, assets: Assets, request: Runtime_Build_Request, allocator: mem.Allocator) -> bool {
 	site := build(model, config, assets, request.cancel_requested)
+	for phase_index in 0..<RUNTIME_TIMING_PHASE_COUNT {
+		if site.timings.measured[phase_index] {
+			result.timings.duration_ms[phase_index] = site.timings.duration_ms[phase_index]
+			result.timings.measured[phase_index] = true
+		}
+	}
 	if !site.ok {
 		result.canceled = build_canceled(request.cancel_requested) || site.error_message == "Build canceled"
 		runtime_result_error(result, site.error_message, allocator)
@@ -321,9 +359,13 @@ Runtime_Build :: proc(request: Runtime_Build_Request, allocator: mem.Allocator =
 			target_arch = request.target_arch,
 			include_test_files = request.include_test_files,
 		})
+		runtime_timing_set(&result.timings, .Source_Discovery, source_workspace.timing.discovery_ms)
+		runtime_timing_set(&result.timings, .Input_Parse_Read, source_workspace.timing.parse_read_ms)
+		runtime_timing_set(&result.timings, .Source_Dependencies, source_workspace.timing.dependency_ms)
 		defer extractor.Destroy(&source_workspace, allocator)
 		runtime_append_extraction_diagnostics(&result, source_workspace, allocator)
 		lowered := extractor.Lower(&source_workspace, {incomplete_policy = request.allow_incomplete ? .Emit : .Reject}, allocator)
+		runtime_timing_set(&result.timings, .Document_Lower, lowered.duration_ms)
 		defer extractor.Lower_Result_Destroy(&lowered, allocator)
 		runtime_append_lowering_diagnostics(&result, lowered, allocator)
 		result.complete = lowered.complete
@@ -333,14 +375,18 @@ Runtime_Build :: proc(request: Runtime_Build_Request, allocator: mem.Allocator =
 			return result
 		}
 		document_refs := [1]^doc.Document{&lowered.document}
+		merge_started := time.tick_now()
 		document_workspace, merge_err := doc.Merge(document_refs[:], allocator)
+		runtime_timing_set(&result.timings, .Document_Merge, time.duration_milliseconds(time.tick_since(merge_started)))
 		defer doc.Workspace_Destroy(&document_workspace)
 		if merge_err.kind != .None {
 			runtime_result_error(&result, doc.error_string(merge_err), allocator)
 			return result
 		}
 		runtime_append_merge_diagnostics(&result, document_workspace, allocator)
+		model_started := time.tick_now()
 		adapter := Model_From_Doc_Workspace(&document_workspace, workspace_path, allocator)
+		runtime_timing_set(&result.timings, .Render_Model, time.duration_milliseconds(time.tick_since(model_started)))
 		defer Document_Model_Destroy(&adapter, allocator)
 		adapter.model.stats.sloc = source_workspace.sloc
 		artifact_path, artifact_path_err := runtime_artifact_path_resolve(workspace_path, request.emit_doc_path)
@@ -351,11 +397,14 @@ Runtime_Build :: proc(request: Runtime_Build_Request, allocator: mem.Allocator =
 		}
 		if !runtime_finish_site(&result, &adapter.model, config, assets, request, allocator) do return result
 		if len(artifact_path) > 0 {
+			write_started := time.tick_now()
 			if artifact_err := runtime_write_document(&lowered.document, artifact_path); len(artifact_err) > 0 {
+				runtime_timing_set(&result.timings, .Document_Write, time.duration_milliseconds(time.tick_since(write_started)))
 				runtime_result_error(&result, artifact_err, allocator)
 				runtime_result_add_diagnostic(&result, .Artifact, artifact_path, 0, 0, artifact_err, allocator)
 				return result
 			}
+			runtime_timing_set(&result.timings, .Document_Write, time.duration_milliseconds(time.tick_since(write_started)))
 			result.artifact_path = runtime_string_clone(artifact_path, allocator)
 		}
 		result.ok = true
@@ -367,6 +416,7 @@ Runtime_Build :: proc(request: Runtime_Build_Request, allocator: mem.Allocator =
 		for &document in documents do doc.Document_Destroy(&document, allocator)
 		delete(documents)
 	}
+	input_started := time.tick_now()
 	for document_path in request.document_paths {
 		data, read_err := os.read_entire_file(document_path, allocator)
 		if read_err != nil {
@@ -385,17 +435,22 @@ Runtime_Build :: proc(request: Runtime_Build_Request, allocator: mem.Allocator =
 		}
 		append(&documents, document)
 	}
+	runtime_timing_set(&result.timings, .Input_Parse_Read, time.duration_milliseconds(time.tick_since(input_started)))
 	document_refs := make([dynamic]^doc.Document, 0, len(documents), allocator)
 	defer delete(document_refs)
 	for &document in documents do append(&document_refs, &document)
+	merge_started := time.tick_now()
 	document_workspace, merge_err := doc.Merge(document_refs[:], allocator)
+	runtime_timing_set(&result.timings, .Document_Merge, time.duration_milliseconds(time.tick_since(merge_started)))
 	defer doc.Workspace_Destroy(&document_workspace)
 	if merge_err.kind != .None {
 		runtime_result_error(&result, doc.error_string(merge_err), allocator)
 		return result
 	}
 	runtime_append_merge_diagnostics(&result, document_workspace, allocator)
+	model_started := time.tick_now()
 	adapter := Model_From_Doc_Workspace_Filtered(&document_workspace, workspace_path, config.workspace_packages_only, allocator)
+	runtime_timing_set(&result.timings, .Render_Model, time.duration_milliseconds(time.tick_since(model_started)))
 	defer Document_Model_Destroy(&adapter, allocator)
 	adapter.model.stats.sloc = request.document_sloc
 	result.complete = true
@@ -424,6 +479,9 @@ test_runtime_build_publishes_site_and_sidecar :: proc(t: ^testing.T) {
 	result := Runtime_Build(request)
 	defer Runtime_Build_Result_Destroy(&result)
 	testing.expect(t, result.ok, result.error_message)
+	for measured, phase_index in result.timings.measured {
+		testing.expectf(t, measured, "source build with sidecar should measure timing phase %d", phase_index)
+	}
 	testing.expect(t, os.exists(path_join({root, "dist", "docs", "index.html"})), "runtime build should publish a static site")
 	artifact_path := path_join({root, "dist", "docs", "demo.odin-doc"})
 	testing.expect(t, os.exists(artifact_path), "runtime build should publish its requested sidecar")
