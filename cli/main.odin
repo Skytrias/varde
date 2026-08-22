@@ -50,6 +50,17 @@ print_lower_timings :: proc(timing: extractor.Lower_Timing) {
 	fmt.eprintf("varde_lower_workload packages=%d files=%d declarations=%d entities=%d types=%d pending_aliases=%d pending_constants=%d pending_groups=%d named_type_candidates=%d named_type_entity_scans=%d named_type_lookups=%d named_type_index_names=%d named_type_duplicates=%d diagnostics=%d\n", timing.package_count, timing.file_count, timing.declaration_count, timing.entity_count, timing.type_count, timing.pending_alias_count, timing.pending_constant_count, timing.pending_group_count, timing.named_type_candidates, timing.named_type_entity_scans, timing.named_type_lookups, timing.named_type_index_names, timing.named_type_duplicates, timing.diagnostic_count)
 }
 
+print_site_page_timings :: proc(timing: varde.Site_Page_Timing) {
+	if !timing.measured do return
+	fmt.eprintf("varde_site_page_timing phase=index duration_ms=%.3f\n", timing.index_page_ms)
+	fmt.eprintf("varde_site_page_timing phase=builtin duration_ms=%.3f\n", timing.builtin_page_ms)
+	fmt.eprintf("varde_site_page_timing phase=packages duration_ms=%.3f count=%d max_ms=%.3f\n", timing.package_pages_ms, timing.package_page_count, timing.package_page_max_ms)
+	fmt.eprintf("varde_site_page_timing phase=package-tree-build duration_ms=%.3f calls=%d\n", timing.package_tree_build_ms, timing.package_tree_calls)
+	fmt.eprintf("varde_site_page_timing phase=package-tree-render duration_ms=%.3f calls=%d\n", timing.package_tree_render_ms, timing.package_tree_calls)
+	fmt.eprintf("varde_site_page_timing phase=group-entries duration_ms=%.3f calls=%d\n", timing.group_entries_ms, timing.group_entries_calls)
+	fmt.eprintf("varde_site_page_timing phase=package-write duration_ms=%.3f calls=%d\n", timing.package_write_ms, timing.package_write_calls)
+}
+
 print_usage :: proc() {
 	fmt.eprintln("Usage:")
 	fmt.eprintln("  varde inspect <file.odin-doc> [...more.odin-doc]")
@@ -138,6 +149,7 @@ build_from_source :: proc(root_path, output_dir, emit_doc_path, target_os, targe
 	defer varde.Runtime_Build_Result_Destroy(&built)
 	print_timings(built.timings, total_ms)
 	print_lower_timings(built.lower_timing)
+	print_site_page_timings(built.site_page_timing)
 	print_runtime_diagnostics(built)
 	if !built.ok { fmt.eprintf("Varde build failed: %s\n", built.error_message); return }
 	status := "complete"

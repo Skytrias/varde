@@ -97,6 +97,7 @@ Runtime_Build_Result :: struct {
 	sloc:          int,
 	timings:       Runtime_Timings,
 	lower_timing:  extractor.Lower_Timing,
+	site_page_timing: Site_Page_Timing,
 	diagnostics:   [dynamic]Runtime_Diagnostic,
 	error_message: string,
 }
@@ -266,6 +267,7 @@ runtime_finish_site :: proc(result: ^Runtime_Build_Result, model: ^Model, config
 			result.timings.measured[phase_index] = true
 		}
 	}
+	result.site_page_timing = site.site_page_timing
 	if !site.ok {
 		result.canceled = build_canceled(request.cancel_requested) || site.error_message == "Build canceled"
 		runtime_result_error(result, site.error_message, allocator)
@@ -485,6 +487,8 @@ test_runtime_build_publishes_site_and_sidecar :: proc(t: ^testing.T) {
 		testing.expectf(t, measured, "source build with sidecar should measure timing phase %d", phase_index)
 	}
 	testing.expect(t, result.lower_timing.measured, "source build should report detailed lowering timings")
+	testing.expect(t, result.site_page_timing.measured && result.site_page_timing.package_page_count == 1, "source build should report detailed site page timings")
+	testing.expect(t, result.site_page_timing.group_entries_calls == ENTRY_GROUP_COUNT, "each package should collect declaration groups once")
 	testing.expect(t, os.exists(path_join({root, "dist", "docs", "index.html"})), "runtime build should publish a static site")
 	artifact_path := path_join({root, "dist", "docs", "demo.odin-doc"})
 	testing.expect(t, os.exists(artifact_path), "runtime build should publish its requested sidecar")

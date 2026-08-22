@@ -101,7 +101,8 @@ Entry_Group :: enum {
 	Other,
 }
 
-ENTRY_GROUP_ORDER :: []Entry_Group{.Types, .Constants, .Variables, .Procedures, .Procedure_Groups, .Other}
+ENTRY_GROUP_ORDER :: [6]Entry_Group{.Types, .Constants, .Variables, .Procedures, .Procedure_Groups, .Other}
+ENTRY_GROUP_COUNT :: len(ENTRY_GROUP_ORDER)
 
 Package_Entry :: struct {
 	entry: ^Entry,
@@ -163,6 +164,23 @@ Build_Result :: struct {
 	entry_count:     int,
 	error_message:   string,
 	timings:         Runtime_Timings,
+	site_page_timing: Site_Page_Timing,
+}
+
+Site_Page_Timing :: struct {
+	measured:              bool,
+	index_page_ms:         f64,
+	builtin_page_ms:       f64,
+	package_pages_ms:      f64,
+	package_page_max_ms:   f64,
+	package_page_count:    int,
+	package_tree_build_ms: f64,
+	package_tree_render_ms: f64,
+	package_tree_calls:    int,
+	group_entries_ms:      f64,
+	group_entries_calls:   int,
+	package_write_ms:      f64,
+	package_write_calls:   int,
 }
 
 config_default :: proc(workspace_path, title, description: string) -> Config {
@@ -1217,7 +1235,7 @@ write_package_toc_group :: proc(builder: ^strings.Builder, group: Entry_Group, e
 	strings.write_string(builder, "</div></section>")
 }
 
-write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^Package, config: Config, extensions: Site_Extensions, output_root: string) -> string {
+write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^Package, config: Config, extensions: Site_Extensions, output_root: string, timing: ^Site_Page_Timing = nil) -> string {
 	page_relative := package_output_path(pkg^)
 	page_path := path_join({output_root, page_relative})
 	assets_relative, _ := filepath.rel(filepath.dir(page_path), path_join({output_root, "assets"}), context.temp_allocator)
@@ -1229,7 +1247,7 @@ write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^P
 	site_head(&builder, pkg.name, config.title, assets_relative, site_root, config, extensions)
 	if len(extensions.before_content) > 0 do strings.write_string(&builder, string(extensions.before_content[:]))
 	strings.write_string(&builder, "<main id=\"main\" class=\"reference-layout\"><aside class=\"package-explorer\"><nav aria-label=\"Package explorer\"><p class=\"explorer-title\">Packages</p>")
-	write_package_tree(&builder, model, page_path, output_root, pkg.relative_path, false, false)
+	write_package_tree(&builder, model, page_path, output_root, pkg.relative_path, false, false, timing)
 	strings.write_string(&builder, "</nav></aside><article class=\"reference\"><nav class=\"breadcrumb\" aria-label=\"Breadcrumb\"><a href=\"")
 	html_attr(&builder, package_href_from(page_path, path_join({output_root, "index.html"}), ""))
 	strings.write_string(&builder, "\">Packages</a> / ")
@@ -1241,15 +1259,22 @@ write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^P
 	strings.write_string(&builder, "</h1></header>")
 	package_context := Doc_Render_Context{model = model, indexes = indexes, output_root = output_root, page_path = page_path, pkg = pkg}
 	write_doc_body(&builder, pkg.overview, package_context)
+	group_entries: [ENTRY_GROUP_COUNT][dynamic]Package_Entry
+	defer {
+		for &entries in group_entries do delete(entries)
+	}
 	for group in ENTRY_GROUP_ORDER {
-		entries := package_group_entries(pkg, group)
-		defer delete(entries)
-		write_package_entry_group(&builder, model, package_context, config, group, entries[:])
+		group_started := time.tick_now()
+		group_entries[int(group)] = package_group_entries(pkg, group)
+		if timing != nil {
+			timing.group_entries_ms += time.duration_milliseconds(time.tick_since(group_started))
+			timing.group_entries_calls += 1
+		}
+		write_package_entry_group(&builder, model, package_context, config, group, group_entries[int(group)][:])
 	}
 	strings.write_string(&builder, "</article><aside class=\"package-toc\"><nav aria-label=\"On this page\"><p class=\"toc-title\">On this page</p><a class=\"toc-overview\" href=\"#main\">Overview</a><div class=\"toc-jumps\" aria-label=\"Declaration groups\">")
 	for group in ENTRY_GROUP_ORDER {
-		entries := package_group_entries(pkg, group)
-		defer delete(entries)
+		entries := group_entries[int(group)]
 		if len(entries) == 0 do continue
 		anchor := entry_group_anchor(group)
 		strings.write_string(&builder, "<a href=\"#"); html_attr(&builder, anchor); strings.write_string(&builder, "\">")
@@ -1258,13 +1283,17 @@ write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^P
 	}
 	strings.write_string(&builder, "</div>")
 	for group in ENTRY_GROUP_ORDER {
-		entries := package_group_entries(pkg, group)
-		defer delete(entries)
-		write_package_toc_group(&builder, group, entries[:])
+		write_package_toc_group(&builder, group, group_entries[int(group)][:])
 	}
 	strings.write_string(&builder, "</nav></aside></main>")
 	site_footer(&builder, assets_relative, extensions)
-	return write_text_file(page_path, &builder)
+	write_started := time.tick_now()
+	err := write_text_file(page_path, &builder)
+	if timing != nil {
+		timing.package_write_ms += time.duration_milliseconds(time.tick_since(write_started))
+		timing.package_write_calls += 1
+	}
+	return err
 }
 
 // Built-in types are renderer-owned reference material. Keeping this page out
@@ -1520,12 +1549,19 @@ write_package_tree_children :: proc(
 	}
 }
 
-write_package_tree :: proc(builder: ^strings.Builder, model: ^Model, page_path, output_root, active_relative_path: string, show_metadata, collapse_branches: bool) {
+write_package_tree :: proc(builder: ^strings.Builder, model: ^Model, page_path, output_root, active_relative_path: string, show_metadata, collapse_branches: bool, timing: ^Site_Page_Timing = nil) {
+	build_started := time.tick_now()
 	nodes := package_tree_build(model)
+	if timing != nil {
+		timing.package_tree_build_ms += time.duration_milliseconds(time.tick_since(build_started))
+		timing.package_tree_calls += 1
+	}
 	defer package_tree_destroy(nodes)
+	render_started := time.tick_now()
 	strings.write_string(builder, "<ul class=\"package-tree\">")
 	write_package_tree_children(builder, model, nodes[:], 0, page_path, output_root, active_relative_path, show_metadata, collapse_branches)
 	strings.write_string(builder, "</ul>")
+	if timing != nil do timing.package_tree_render_ms += time.duration_milliseconds(time.tick_since(render_started))
 }
 
 write_index_page :: proc(model: ^Model, config: Config, extensions: Site_Extensions, output_root: string) -> string {
@@ -1862,6 +1898,7 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 	runtime_timing_set(&result.timings, .Site_Index_Assets, time.duration_milliseconds(time.tick_since(index_assets_started)))
 	if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }
 	pages_started := time.tick_now()
+	result.site_page_timing.measured = true
 	index_config := config
 	if len(assets.brand_png) == 0 {
 		index_config.include_brand_artwork = false
@@ -1872,13 +1909,23 @@ build :: proc(model: ^Model, config: Config, assets: Assets, cancel_requested: ^
 	} else if !config.include_brand_artwork {
 		index_config.include_brand_artwork = false
 	}
+	index_page_started := time.tick_now()
 	if err := write_index_page(model, index_config, extensions, staging); len(err) > 0 { result.error_message = err; return result }
+	result.site_page_timing.index_page_ms = time.duration_milliseconds(time.tick_since(index_page_started))
+	builtin_page_started := time.tick_now()
 	if err := write_builtin_types_page(model, config, extensions, staging); len(err) > 0 { result.error_message = err; return result }
+	result.site_page_timing.builtin_page_ms = time.duration_milliseconds(time.tick_since(builtin_page_started))
+	package_pages_started := time.tick_now()
 	for &pkg in model.packages {
 		if build_canceled(cancel_requested) { result.error_message = "Build canceled"; return result }
 		if !site_package_is_renderable(pkg) do continue
-		if err := write_package_page(model, &indexes, &pkg, config, extensions, staging); len(err) > 0 { result.error_message = err; return result }
+		package_page_started := time.tick_now()
+		if err := write_package_page(model, &indexes, &pkg, config, extensions, staging, &result.site_page_timing); len(err) > 0 { result.error_message = err; return result }
+		package_page_ms := time.duration_milliseconds(time.tick_since(package_page_started))
+		result.site_page_timing.package_page_count += 1
+		result.site_page_timing.package_page_max_ms = max(result.site_page_timing.package_page_max_ms, package_page_ms)
 	}
+	result.site_page_timing.package_pages_ms = time.duration_milliseconds(time.tick_since(package_pages_started))
 	runtime_timing_set(&result.timings, .Site_Pages, time.duration_milliseconds(time.tick_since(pages_started)))
 	publish_started := time.tick_now()
 	if err := write_manifest(staging, config, model); len(err) > 0 { result.error_message = err; return result }
