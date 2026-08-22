@@ -60,7 +60,7 @@ print_site_page_timings :: proc(timing: varde.Site_Page_Timing) {
 	fmt.eprintf("varde_site_page_timing phase=group-entries duration_ms=%.3f calls=%d\n", timing.group_entries_ms, timing.group_entries_calls)
 	fmt.eprintf("varde_site_page_timing phase=package-content duration_ms=%.3f\n", timing.package_content_ms)
 	fmt.eprintf("varde_site_page_timing phase=package-toc duration_ms=%.3f\n", timing.package_toc_ms)
-	fmt.eprintf("varde_site_page_timing phase=signatures duration_ms=%.3f calls=%d bytes=%d tokens=%d identifiers=%d builtin_lookups=%d builtin_candidates=%d\n", timing.signature_ms, timing.signature_calls, timing.signature_bytes, timing.signature_tokens, timing.signature_identifiers, timing.builtin_lookup_calls, timing.builtin_candidates)
+	fmt.eprintf("varde_site_page_timing phase=signatures duration_ms=%.3f calls=%d bytes=%d tokens=%d identifiers=%d builtin_lookups=%d builtin_candidates=%d entry_lookups=%d package_index_lookups=%d\n", timing.signature_ms, timing.signature_calls, timing.signature_bytes, timing.signature_tokens, timing.signature_identifiers, timing.builtin_lookup_calls, timing.builtin_candidates, timing.entry_lookup_calls, timing.package_index_lookups)
 	fmt.eprintf("varde_site_page_timing phase=doc-bodies duration_ms=%.3f calls=%d bytes=%d\n", timing.doc_body_ms, timing.doc_body_calls, timing.doc_body_bytes)
 	fmt.eprintf("varde_site_page_timing phase=package-write duration_ms=%.3f calls=%d\n", timing.package_write_ms, timing.package_write_calls)
 }

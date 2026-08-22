@@ -207,6 +207,8 @@ Site_Page_Timing :: struct {
 	signature_identifiers: int,
 	builtin_lookup_calls:  int,
 	builtin_candidates:    int,
+	entry_lookup_calls:    int,
+	package_index_lookups: int,
 	doc_body_ms:           f64,
 	doc_body_calls:        int,
 	doc_body_bytes:        int,
@@ -434,7 +436,7 @@ output_path_resolve :: proc(workspace_path, output_dir: string, allocator := con
 	return path_join({workspace_path, clean}, allocator), ""
 }
 
-html_escape_append :: proc(builder: ^strings.Builder, value: string, attribute := false) {
+html_escape_append_slow :: proc(builder: ^strings.Builder, value: string, attribute := false) {
 	for ch in value {
 		switch ch {
 		case '&': strings.write_string(builder, "&amp;")
@@ -450,6 +452,30 @@ html_escape_append :: proc(builder: ^strings.Builder, value: string, attribute :
 		case: strings.write_rune(builder, ch)
 		}
 	}
+}
+
+html_escape_append :: proc(builder: ^strings.Builder, value: string, attribute := false) {
+	if !utf8.valid_string(value) {
+		html_escape_append_slow(builder, value, attribute)
+		return
+	}
+	span_start := 0
+	for ch, index in value {
+		replacement := ""
+		switch ch {
+		case '&': replacement = "&amp;"
+		case '<': replacement = "&lt;"
+		case '>': replacement = "&gt;"
+		case '"': replacement = "&quot;"
+		case '\'':
+			if attribute do replacement = "&#39;"
+		}
+		if len(replacement) == 0 do continue
+		if index > span_start do strings.write_string(builder, value[span_start:index])
+		strings.write_string(builder, replacement)
+		span_start = index + 1
+	}
+	if span_start < len(value) do strings.write_string(builder, value[span_start:])
 }
 
 html_text :: proc(builder: ^strings.Builder, value: string) { html_escape_append(builder, value) }
@@ -669,6 +695,7 @@ Doc_Render_Context :: struct {
 	page_path:   string,
 	pkg:         ^Package,
 	file:        ^File,
+	package_index: ^Site_Package_Index,
 }
 
 // These are render-only fallbacks for Odin's stable, foundational type names.
@@ -823,8 +850,9 @@ site_render_indexes_destroy :: proc(indexes: ^Site_Render_Indexes) {
 	indexes^ = {}
 }
 
-site_index_for_package :: proc(indexes: ^Site_Render_Indexes, pkg: ^Package) -> ^Site_Package_Index {
+site_index_for_package :: proc(indexes: ^Site_Render_Indexes, pkg: ^Package, timing: ^Site_Page_Timing = nil) -> ^Site_Package_Index {
 	if indexes == nil || pkg == nil do return nil
+	if timing != nil do timing.package_index_lookups += 1
 	pkg_index, ok := indexes.by_package[pkg]
 	if ok do return pkg_index
 	return nil
@@ -902,9 +930,9 @@ write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render
 		if token.kind == .Ident && !is_directive && !odin_identifier_is_local_label(code, end) {
 			if timing != nil do timing.signature_identifiers += 1
 			if len(selector_alias) > 0 {
-				href, linked = site_internal_href(ctx, strings.concatenate({selector_alias, ".", text}, context.temp_allocator), false)
+				href, linked = site_internal_href(ctx, strings.concatenate({selector_alias, ".", text}, context.temp_allocator), false, timing)
 			} else {
-				href, linked = site_internal_href(ctx, text, false)
+				href, linked = site_internal_href(ctx, text, false, timing)
 				if !linked {
 					builtin, linked = builtin_type_find(ctx.indexes, text, timing)
 					if linked do href = builtin_type_href(ctx, text)
@@ -946,9 +974,14 @@ write_odin_code :: proc(builder: ^strings.Builder, code: string, ctx: Doc_Render
 	if cursor < len(code) do html_text(builder, code[cursor:])
 }
 
-site_entry_find_unique :: proc(indexes: ^Site_Render_Indexes, pkg: ^Package, name: string) -> (^Entry, bool) {
+site_entry_find_unique :: proc(indexes: ^Site_Render_Indexes, pkg: ^Package, name: string, timing: ^Site_Page_Timing = nil, cached_index: ^Site_Package_Index = nil) -> (^Entry, bool) {
 	if pkg == nil || len(name) == 0 do return nil, false
-	if pkg_index := site_index_for_package(indexes, pkg); pkg_index != nil {
+	if timing != nil do timing.entry_lookup_calls += 1
+	if cached_index != nil && cached_index.pkg == pkg {
+		entry, ok := cached_index.entries[name]
+		return entry, ok
+	}
+	if pkg_index := site_index_for_package(indexes, pkg, timing); pkg_index != nil {
 		entry, ok := pkg_index.entries[name]
 		return entry, ok
 	}
@@ -1022,7 +1055,7 @@ site_import_find_alias :: proc(file: ^File, alias: string) -> ^Import {
 	return nil
 }
 
-site_internal_href :: proc(ctx: Doc_Render_Context, raw_url: string, resolve_package := true) -> (string, bool) {
+site_internal_href :: proc(ctx: Doc_Render_Context, raw_url: string, resolve_package := true, timing: ^Site_Page_Timing = nil) -> (string, bool) {
 	if ctx.model == nil || ctx.pkg == nil do return "", false
 	url := strings.trim_space(raw_url)
 	if len(url) == 0 do return "", false
@@ -1040,14 +1073,14 @@ site_internal_href :: proc(ctx: Doc_Render_Context, raw_url: string, resolve_pac
 	if dot := strings.index_byte(url, '.'); dot > 0 && dot + 1 < len(url) {
 		if import_entry := site_import_find_alias(ctx.file, url[:dot]); import_entry != nil {
 			if target_pkg := site_package_for_import(ctx.indexes, ctx.model, ctx.pkg, import_entry.path); target_pkg != nil {
-				if target_entry, ok := site_entry_find_unique(ctx.indexes, target_pkg, url[dot + 1:]); ok {
+				if target_entry, ok := site_entry_find_unique(ctx.indexes, target_pkg, url[dot + 1:], timing); ok {
 					target_path := path_join({ctx.output_root, package_output_path(target_pkg^)})
 					return package_href_from(ctx.page_path, target_path, target_entry.anchor), true
 				}
 			}
 		}
 	}
-	if target_entry, ok := site_entry_find_unique(ctx.indexes, ctx.pkg, url); ok {
+	if target_entry, ok := site_entry_find_unique(ctx.indexes, ctx.pkg, url, timing, ctx.package_index); ok {
 		return strings.concatenate({"#", target_entry.anchor}, context.temp_allocator), true
 	}
 	if !resolve_package do return "", false
@@ -1314,7 +1347,8 @@ write_package_page :: proc(model: ^Model, indexes: ^Site_Render_Indexes, pkg: ^P
 	strings.write_string(&builder, "</p><h1>")
 	html_text(&builder, pkg.name)
 	strings.write_string(&builder, "</h1></header>")
-	package_context := Doc_Render_Context{model = model, indexes = indexes, output_root = output_root, page_path = page_path, pkg = pkg}
+	package_index := site_index_for_package(indexes, pkg, timing)
+	package_context := Doc_Render_Context{model = model, indexes = indexes, output_root = output_root, page_path = page_path, pkg = pkg, package_index = package_index}
 	overview_started := time.tick_now()
 	write_doc_body(&builder, pkg.overview, package_context)
 	if timing != nil {
@@ -2123,6 +2157,13 @@ test_html_escape_handles_hostile_text :: proc(t: ^testing.T) {
 	defer strings.builder_destroy(&builder)
 	html_text(&builder, "<script>&\"")
 	testing.expect(t, strings.to_string(builder) == "&lt;script&gt;&amp;&quot;", "HTML text should be escaped")
+	fast, reference: strings.Builder
+	defer strings.builder_destroy(&fast)
+	defer strings.builder_destroy(&reference)
+	value := "Odin · <tag title='quoted'> & \"text\""
+	html_escape_append(&fast, value, true)
+	html_escape_append_slow(&reference, value, true)
+	testing.expect(t, strings.to_string(fast) == strings.to_string(reference), "bulk HTML escaping should match the rune-by-rune reference for UTF-8 attributes")
 }
 
 @(test)
